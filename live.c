@@ -11,16 +11,96 @@
 #include <mysql.h>
 #include <sys/types.h>
 #include <stdlib.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
+#include <curl/curl.h> // install with `apt-get install libcurl4-openssl-dev`
+#include <curl/easy.h>
+// #include <sys/socket.h>
+// #include <netinet/in.h>
+// #include <netdb.h>
 #include "./lib/cJSON/cJSON.h"
 #include "db.h"
-#define HTTP_RESPONSE_SIZE 10000
+#define HTTP_RESPONSE_SIZE 4096
 #define TARGET_RES "live"
 #define TARGET_METER "SELECT id, org_id, bos_uuid, url, live_last_updated FROM meters WHERE (gauges_using > 0 OR for_orb > 0 OR timeseries_using > 0) OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '') AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') AND source = 'buildingos' ORDER BY live_last_updated ASC LIMIT 1"
+#define TOKEN_URL "https://api.buildingos.com/o/token/"
 #define h_addr h_addr_list[0] // not sure why I need this
 #define DEBUG 1
+
+// Stores last page downloaded by http_request()
+struct MemoryStruct {
+	char *memory;
+	size_t size;
+};
+
+/**
+ * Helper for http_request()
+ */
+static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
+{
+	size_t realsize = size * nmemb;
+	struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+ 
+	mem->memory = realloc(mem->memory, mem->size + realsize + 1);
+	if(mem->memory == NULL) {
+		/* out of memory! */ 
+		printf("not enough memory (realloc returned NULL)\n");
+		return 0;
+	}
+ 
+	memcpy(&(mem->memory[mem->size]), contents, realsize);
+	mem->size += realsize;
+	mem->memory[mem->size] = 0;
+ 
+	return realsize;
+}
+
+/**
+ * See https://curl.haxx.se/libcurl/c/postinmemory.html
+ * @param url  http://www.example.org/
+ * @param post e.g. Field=1&Field=2&Field=3
+ */
+void http_request(char *url, char *post) {
+	CURL *curl;
+	CURLcode res;
+	struct MemoryStruct chunk;
+	chunk.memory = malloc(1);  /* will be grown as needed by realloc above */ 
+	chunk.size = 0;    /* no data at this point */ 
+	curl_global_init(CURL_GLOBAL_ALL);
+	curl = curl_easy_init();
+	if (curl) {
+		curl_easy_setopt(curl, CURLOPT_URL, url);
+		/* send all data to this function  */ 
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+		/* we pass our 'chunk' struct to the callback function */ 
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+		/* some servers don't like requests that are made without a user-agent
+			 field, so we provide one */ 
+		curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post);
+		/* if we don't provide POSTFIELDSIZE, libcurl will strlen() by
+			 itself */ 
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post));
+		/* Perform the request, res will get the return code */ 
+		res = curl_easy_perform(curl);
+		/* Check for errors */ 
+		if (res != CURLE_OK) {
+			fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		}
+		else {
+			/*
+			 * Now, our chunk.memory points to a memory block that is chunk.size
+			 * bytes big and contains the remote file.
+			 *
+			 * Do something nice with it!
+			 */ 
+			printf("%s\n", chunk.memory);
+		}
+		/* always cleanup */ 
+		curl_easy_cleanup(curl);
+		free(chunk.memory);
+		/* we're done with libcurl, so clean it up */ 
+		curl_global_cleanup();
+	}
+}
 
 void cleanup(MYSQL *conn, pid_t pid) {
 	char query[255];
@@ -34,71 +114,6 @@ void cleanup(MYSQL *conn, pid_t pid) {
 void error(const char *msg) {
 	fprintf(stderr, "%s\n", msg);
 	exit(1);
-}
-
-/**
- * Sends an HTTP POST request and returns the response
- * See https://stackoverflow.com/a/22135885
- * @param  host    e.g. api.somesite.com
- * @param  message e.g. "POST /apikey=%s&command=%s HTTP/1.0\r\n\r\n"
- * @return         response from requested resource
- */
-char *http_post(char *host, char *message) {
-  int portno = 80;
-  struct hostent *server;
-  struct sockaddr_in serv_addr;
-  int sockfd, bytes, sent, received, total;
-  char *response = malloc(HTTP_RESPONSE_SIZE * sizeof(char));
-  /* create the socket */
-  sockfd = socket(AF_INET, SOCK_STREAM, 0);
-  if (sockfd < 0) error("ERROR opening socket");
-  /* lookup the ip address */
-  server = gethostbyname(host);
-  if (server == NULL) error("ERROR, no such host");
-  /* fill in the structure */
-  memset(&serv_addr,0,sizeof(serv_addr));
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons(portno);
-  memcpy(&serv_addr.sin_addr.s_addr,server->h_addr,server->h_length);
-  /* connect the socket */
-  if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) {
-    error("ERROR connecting");
-  }
-  /* send the request */
-  total = strlen(message);
-  sent = 0;
-  do {
-    bytes = write(sockfd,message+sent,total-sent);
-    if (bytes < 0) {
-      error("ERROR writing message to socket");
-    }
-    if (bytes == 0) {
-      break;
-    }
-    sent+=bytes;
-  } while (sent < total);
-  /* receive the response */
-  memset(response,0,sizeof(response));
-  total = sizeof(response)-1;
-  received = 0;
-  do {
-    bytes = read(sockfd,response+received,total-received);
-    if (bytes < 0) {
-      error("ERROR reading response from socket");
-    }
-    if (bytes == 0) {
-      break;
-    }
-    received+=bytes;
-  } while (received < total);
-
-  if (received == total) {
-  	printf("%s\n", response);
-    error("ERROR storing complete response from socket");
-  }
-  /* close the socket */
-  close(sockfd);
-  return response;
 }
 
 /**
@@ -156,9 +171,9 @@ char *api_token(MYSQL *conn, char *org_id) {
 	} else { // amortized cost; need to get new API token
 		sprintf(query, "SELECT client_id, client_secret, username, password FROM api WHERE id = '%d'", api_id);
 		row = fetch_row(conn, query);
-		char token_url[1024];
-		sprintf(token_url, "POST /o/token?client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password HTTP/1.0\r\n\r\n", row[0], row[1], row[2], row[3]);
-		printf("%s\n", http_post("api.buildingos.com", token_url));
+		char post_data[255];
+		sprintf(post_data, "client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password", row[0], row[1], row[2], row[3]);
+		http_request(TOKEN_URL, post_data);
 	}
 	return "";
 }
@@ -209,7 +224,7 @@ int main(void) {
 		char *org_id = meter[1];
 		printf("%s - %s - %s - %s - %s\n", meter[0], org_id, meter[2], meter[3], meter[4]);
 		// exit(1);
-    api_token(conn, org_id);
+		api_token(conn, org_id);
 		// updateMeter(conn);
 		break;
 	}
