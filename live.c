@@ -241,23 +241,18 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_uuid, char *meter_url) 
 		cJSON *data_point = cJSON_GetArrayItem(data, i);
 		cJSON *data_point_val = cJSON_GetObjectItem(data_point, "value");
 		cJSON *data_point_time = cJSON_GetObjectItem(data_point, "localtime");
-		printf("%s\n", data_point_time->valuestring);
 		// printf("value: %f localtime: %s\n", data_point_val->valuedouble, data_point_time->valuestring);
-		// https://stackoverflow.com/a/26896792/2624391
-		int y, M, d, h, m;
-		float s;
-		sscanf(data_point_time->valuestring, "%d-%d-%dT%d:%d:%fZ", &y, &M, &d, &h, &m, &s);
-		struct tm tm;
+		// https://stackoverflow.com/questions/11428014/c-validation-in-strptime
+		struct tm ltm = {0};
 		time_t epoch;
-		tm.tm_year = y - 1900; // Year since 1900
-		tm.tm_mon = M - 1;     // 0-11
-		tm.tm_mday = d;        // 1-31
-		tm.tm_hour = h;        // 0-23
-		tm.tm_min = m;         // 0-59
-		tm.tm_sec = (int)s;    // 0-61 (0-60 in C++11)
-		epoch = mktime(&tm);
+		if (strptime(data_point_time->valuestring, ISO8601_FORMAT, &ltm) != NULL) {
+			epoch = mktime(&ltm);
+		} else {
+			error("Unable to parse date");
+		}
+		mktime(&ltm);
 		// if (strptime(data_point_time->valuestring, "%FT%H:%M:%S%Z", &tm) == NULL) {
-		sprintf(sql_query, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES (%d, %f, %d, '%s');\n", meter_id, data_point_val->valuedouble, (int) epoch, TARGET_RES);
+		sprintf(sql_query, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES (%d, %f, %d, '%s');\n", meter_id, data_point_val->valuedouble, (int) time(&epoch), TARGET_RES);
 		strcat(sql_data, sql_query);
 	}
 	printf("%s\n", sql_data);
