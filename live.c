@@ -19,21 +19,21 @@
 #define TARGET_METER "SELECT id, org_id, bos_uuid, url, live_last_updated FROM meters WHERE (gauges_using > 0 OR for_orb > 0 OR timeseries_using > 0) OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '') AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') AND source = 'buildingos' ORDER BY live_last_updated ASC LIMIT 1"
 #define UPDATE_METER_TIMESTAMP "UPDATE meters SET live_last_updated = %d WHERE id = %d"
 #define TOKEN_URL "https://api.buildingos.com/o/token/"
-#define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S-04:00"
-#define TRACK_DAEMON 1 // whether to save record of this daemon in db
+#define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S-04:00" // EST is -4:00
 #define SMALL_CONTAINER 255
 #define MOVE_BACK_AMOUNT 180 // meant to move meters back in the queue of what's being updated by update_meter() so they don't hold up everything if update_meter() keeps failing for some reason. note that if update_meter() does finish, it pushes the meter to the end of the queue by updating the last_updated_col to the current time otherwise the last_updated_col remains the current time minus this amount
 #define DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
+#define READONLY_MODE 1 // prevens daemon from making queries that update/insert/delete data by short circuiting &&
 static char *api_token;
 
-// Stores last page downloaded by http_post()
+// Stores last page downloaded by http_request()
 struct MemoryStruct {
 	char *memory;
 	size_t size;
 };
 
 /**
- * Helper for http_post()
+ * Helper for http_request()
  */
 static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
 	size_t realsize = size * nmemb;
@@ -51,10 +51,16 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 
 /**
  * See https://curl.haxx.se/libcurl/c/postinmemory.html
- * @param url  http://www.example.org/
- * @param post e.g. Field=1&Field=2&Field=3
+ * @param url           http://www.example.org/
+ * @param post          e.g. Field=1&Field=2&Field=3
+ * @param custom_header 1 for a custom header, 0 for default
+ * @param method        1 if POST, 0 if GET
  */
-struct MemoryStruct http_post(char *url, char *post) {
+struct MemoryStruct http_request(char *url, char *post, int custom_header, int method) {
+	char header[50];
+	if (custom_header) {
+		sprintf(header, "Authorization: Bearer %s", api_token);
+	}
 	CURL *curl;
 	CURLcode res;
 	struct MemoryStruct chunk;
@@ -63,7 +69,24 @@ struct MemoryStruct http_post(char *url, char *post) {
 	curl_global_init(CURL_GLOBAL_ALL);
 	curl = curl_easy_init();
 	if (curl) {
-		curl_easy_setopt(curl, CURLOPT_URL, url);
+		if (custom_header) {
+			struct curl_slist *chunk = NULL; // https://curl.haxx.se/libcurl/c/httpcustomheader.html
+			/* Add a custom header */ 
+			chunk = curl_slist_append(chunk, header);
+			res = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
+		}
+		if (method == 1) {
+			curl_easy_setopt(curl, CURLOPT_URL, url);
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post); // if we don't provide POSTFIELDSIZE, libcurl will strlen() by itself
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post)); // Perform the request, res will get the return code
+		} else {
+			char full_url[SMALL_CONTAINER];
+			strcpy(full_url, url);
+			strcat(full_url, "?");
+			strcat(full_url, post);
+			curl_easy_setopt(curl, CURLOPT_URL, full_url);
+			curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+		}
 		/* send all data to this function  */ 
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 		/* we pass our 'chunk' struct to the callback function */ 
@@ -71,11 +94,6 @@ struct MemoryStruct http_post(char *url, char *post) {
 		/* some servers don't like requests that are made without a user-agent
 			 field, so we provide one */ 
 		curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post);
-		/* if we don't provide POSTFIELDSIZE, libcurl will strlen() by
-			 itself */ 
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(post));
-		/* Perform the request, res will get the return code */ 
 		res = curl_easy_perform(curl);
 		/* Check for errors */ 
 		if (res != CURLE_OK) {
@@ -152,7 +170,7 @@ void set_api_token(MYSQL *conn, char *org_id) {
 		row = fetch_row(conn, query);
 		char post_data[SMALL_CONTAINER];
 		sprintf(post_data, "client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password", row[0], row[1], row[2], row[3]);
-		struct MemoryStruct response = http_post(TOKEN_URL, post_data);
+		struct MemoryStruct response = http_request(TOKEN_URL, post_data, 0, 1);
 		cJSON *root = cJSON_Parse(response.memory);
 		cJSON *access_token = cJSON_GetObjectItem(root, "access_token");
 		api_token = (char*) access_token->valuestring;
@@ -186,7 +204,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_uuid, char *meter_url) 
 	// Move the meter back in the queue to be tried again soon in case this function does not complete and the last_updated_col is not updated to the current time
 	char query[SMALL_CONTAINER];
 	sprintf(query, UPDATE_METER_TIMESTAMP, (int) end_time - MOVE_BACK_AMOUNT, meter_id);
-	if (0 && mysql_query(conn, query)) {
+	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 		fprintf(stderr, "%s\n", mysql_error(conn));
 		exit(1);
 	}
@@ -212,11 +230,41 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_uuid, char *meter_url) 
 	// Make call to the API for meter data
 	char post_data[SMALL_CONTAINER];
 	sprintf(post_data, "resolution=%s&start=%s&end=%s", TARGET_RES, iso8601_last_recording, iso8601_time);
-	struct MemoryStruct response = http_post(meter_url, post_data);
+	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0);
+	cJSON *root = cJSON_Parse(response.memory);
+	cJSON *data = cJSON_GetObjectItem(root, "data");
+	char sql_query[SMALL_CONTAINER];
+	char *sql_data;
+	sql_data = malloc(sizeof(char) * SMALL_CONTAINER);
+	int sql_data_size = SMALL_CONTAINER;
+	sql_data[0] = '\0'; // so dont have to strcpy before strcat
+	for (int i = 0; i < cJSON_GetArraySize(data); i++) { // process data
+		cJSON *data_point = cJSON_GetArrayItem(data, i);
+		cJSON *data_point_val = cJSON_GetObjectItem(data_point, "value");
+		cJSON *data_point_time = cJSON_GetObjectItem(data_point, "localtime");
+		// printf("value: %f localtime: %s\n", data_point_val->valuedouble, data_point_time->valuestring);
+		// https://stackoverflow.com/questions/11428014/c-validation-in-strptime
+		struct tm ltm = {0};
+		time_t epoch;
+		if (strptime(data_point_time->valuestring, ISO8601_FORMAT, &ltm) != NULL) {
+			epoch = mktime(&ltm);
+		} else {
+			error("Unable to parse date");
+		}
+		mktime(&ltm);
+		// if (strptime(data_point_time->valuestring, "%FT%H:%M:%S%Z", &tm) == NULL) {
+		sprintf(sql_query, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES (%d, %f, %d, '%s');\n", meter_id, data_point_val->valuedouble, (int) time(&epoch), TARGET_RES);
+		strcat(sql_data, sql_query);
+		sql_data_size += SMALL_CONTAINER;
+		sql_data = realloc(sql_data, sizeof(char) * sql_data_size);
+	}
+	printf("%s\n", sql_data);
+	free(sql_data);
 }
 
 int main(void) {
 	api_token = malloc(40*sizeof(char));
+	api_token[0] = '\0';
 	MYSQL *conn;
 	pid_t pid = getpid();
 	conn = mysql_init(NULL);
@@ -229,7 +277,7 @@ int main(void) {
 	// Insert record of daemon
 	char query[SMALL_CONTAINER];
 	sprintf(query, "INSERT INTO daemons (pid, enabled, target_res) VALUES (%d, %d, '%s')", pid, 0, TARGET_RES);
-	if (TRACK_DAEMON == 0 && mysql_query(conn, query)) { // short circuit
+	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
 		fprintf(stderr, "%s\n", mysql_error(conn));
 		exit(1);
 	}
@@ -245,7 +293,7 @@ int main(void) {
 		res = mysql_use_result(conn);
 		row = mysql_fetch_row(res);
 		mysql_free_result(res);
-		if (TRACK_DAEMON == 0) {
+		if (READONLY_MODE == 0) {
 			if (row == NULL) {
 				fprintf(stderr, "I should not exist.\n");
 				exit(1);
