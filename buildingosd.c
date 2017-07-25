@@ -1,8 +1,23 @@
 /**
- * Updates live data for meters
+ * Fetches "live" resolution data from the BuildingOS API and caches it in the db
+ * Data older than DATA_LIFESPAN are deleted
  *
  * @author Tim Robert-Fitzgerald
  */
+
+#define _XOPEN_SOURCE // for strptime
+#define _GNU_SOURCE // for strptime
+#define TARGET_RES "live" // resolution of data to fetch
+#define TARGET_METER "SELECT id, org_id, url, live_last_updated FROM meters WHERE source = 'buildingos' AND ((gauges_using > 0 OR for_orb > 0 OR timeseries_using > 0) OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY live_last_updated ASC LIMIT 1"
+#define UPDATE_TIMESTAMP_COL "UPDATE meters SET live_last_updated = %d WHERE id = %d"
+#define TOKEN_URL "https://api.buildingos.com/o/token/" // where to get the token from
+#define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S-04:00" // EST is -4:00
+#define SMALL_CONTAINER 255 // small fixed-size container for arrays
+#define MOVE_BACK_AMOUNT 180 // meant to move meters back in the queue of what's being updated by update_meter() so they don't hold up everything if update_meter() keeps failing for some reason. note that if update_meter() does finish, it pushes the meter to the end of the queue by updating the last_updated_col to the current time otherwise the last_updated_col remains the current time minus this amount
+#define DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
+#define UPDATE_CURRENT 1 // update the meters.current column with the current reading?
+#define READONLY_MODE 0 // if on (i.e. 1) the daemon will not make queries that update/insert/delete data by short circuiting if stmts
+#define SKIP_API_TOKEN 0 // set the api_token to an empty string instead of querying the api. also makes http_request() ignore ssl certs so we can fetch from our own server (for testing, set to 0 in production)
 
 #include <stdio.h>
 #include <string.h>
@@ -10,23 +25,63 @@
 #include <time.h>
 #include <mysql.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <stdlib.h>
+#include <signal.h>
+#include <syslog.h>
+#include <sys/stat.h>
 #include <curl/curl.h> // install with `apt-get install libcurl4-openssl-dev`
 #include <curl/easy.h>
 #include "./lib/cJSON/cJSON.h"
 #include "db.h"
-#define CALC_RELATIVE_VALUES 1
-#define TARGET_RES "live"
-//#define TARGET_METER "SELECT id, org_id, url, live_last_updated FROM meters WHERE source = 'user' AND ((gauges_using > 0 OR for_orb > 0 OR timeseries_using > 0) OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY live_last_updated ASC LIMIT 1"
-#define TARGET_METER "SELECT id, org_id, url, live_last_updated FROM meters WHERE source = 'buildingos' AND ((gauges_using > 0 OR for_orb > 0 OR timeseries_using > 0) OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY live_last_updated ASC LIMIT 1"
-#define TOKEN_URL "https://api.buildingos.com/o/token/"
-#define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S-04:00" // EST is -4:00
-#define SMALL_CONTAINER 255
-#define MOVE_BACK_AMOUNT 180 // meant to move meters back in the queue of what's being updated by update_meter() so they don't hold up everything if update_meter() keeps failing for some reason. note that if update_meter() does finish, it pushes the meter to the end of the queue by updating the last_updated_col to the current time otherwise the last_updated_col remains the current time minus this amount
-#define DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
-#define READONLY_MODE 1 // prevens daemon from making queries that update/insert/delete data by short circuiting &&
-#define SKIP_API_TOKEN 0 // set the api_token to an empty string instead of querying the api. also makes http_request() ignore ssl certs so we can fetch from our own server
+
 static char *api_token;
+static pid_t buildingosd_pid;
+/**
+ * daemonizes a process by disconnecting it from the shell it was started in
+ * See https://stackoverflow.com/questions/17954432/creating-a-daemon-in-linux
+ */
+static void daemonize() {
+	pid_t pid;
+	/* Fork off the parent process */
+	pid = fork();
+	/* An error occurred */
+	if (pid < 0)
+		exit(EXIT_FAILURE);
+	/* Success: Let the parent terminate */
+	if (pid > 0)
+		exit(EXIT_SUCCESS);
+	/* On success: The child process becomes session leader */
+	if (setsid() < 0)
+		exit(EXIT_FAILURE);
+	/* Catch, ignore and handle signals */
+	//TODO: Implement a working signal handler */
+	signal(SIGCHLD, SIG_IGN);
+	signal(SIGHUP, SIG_IGN);
+
+	/* Fork off for the second time*/
+	pid = fork();
+
+	/* An error occurred */
+	if (pid < 0)
+		exit(EXIT_FAILURE);
+	/* Success: Let the parent terminate */
+	if (pid > 0)
+		exit(EXIT_SUCCESS);
+	/* Set new file permissions */
+	umask(0);
+	/* Change the working directory to the root directory */
+	/* or another appropriated directory */
+	chdir("/");
+	/* Close all open file descriptors */
+	int x;
+	for (x = sysconf(_SC_OPEN_MAX); x>=0; x--) {
+		close(x);
+	}
+	/* Open the log file */
+	openlog("buildingosd", LOG_PID, LOG_DAEMON);
+}
+
 
 // Stores page downloaded by http_request()
 struct MemoryStruct {
@@ -42,7 +97,7 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 	struct MemoryStruct *mem = (struct MemoryStruct *)userp;
 	mem->memory = realloc(mem->memory, mem->size + realsize + 1);
 	if (mem->memory == NULL) {
-		printf("not enough memory (realloc returned NULL)\n");
+		fprintf(stderr, "not enough memory (realloc returned NULL)\n");
 		return 0;
 	}
 	memcpy(&(mem->memory[mem->size]), contents, realsize);
@@ -103,6 +158,7 @@ struct MemoryStruct http_request(char *url, char *post, int custom_header, int m
 		/* Check for errors */ 
 		if (res != CURLE_OK) {
 			fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+			exit(1);
 		}
 		curl_easy_cleanup(curl);
 		curl_global_cleanup();
@@ -111,23 +167,27 @@ struct MemoryStruct http_request(char *url, char *post, int custom_header, int m
 	// free(chunk.memory);
 }
 
-/**
- * Execute before program termination
- */
-void cleanup(MYSQL *conn, pid_t pid) {
-	char query[SMALL_CONTAINER];
-	sprintf(query, "DELETE FROM daemons WHERE pid = %d", pid);
-	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
-		fprintf(stderr, "%s\n", mysql_error(conn));
-		exit(1);
-	}
-}
-
+void cleanup(MYSQL *conn); // do this so error() knows about cleanup()
 /**
  * Handle errors
  */
-void error(const char *msg) {
-	fprintf(stderr, "%s\n", msg);
+void error(const char *msg, MYSQL *conn) {
+	syslog(LOG_ERR, msg);
+	cleanup(conn);
+}
+
+/**
+ * Execute before program termination
+ */
+void cleanup(MYSQL *conn) {
+	syslog(LOG_NOTICE, "killing daemon %d", buildingosd_pid);
+	char query[SMALL_CONTAINER];
+	sprintf(query, "DELETE FROM daemons WHERE pid = %d", buildingosd_pid);
+	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
+		syslog(LOG_ERR, mysql_error(conn));
+	}
+	closelog();
+	mysql_close(conn);
 	exit(1);
 }
 
@@ -138,8 +198,7 @@ MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
 	MYSQL_RES *res;
 	MYSQL_ROW row;
 	if (mysql_query(conn, query)) {
-		fprintf(stderr, "%s\n", mysql_error(conn));
-		exit(1);
+		error(mysql_error(conn), conn);
 	}
 	// res = mysql_use_result(conn); // this doesnt work?
 	res = mysql_store_result(conn);
@@ -181,21 +240,16 @@ void set_api_token(MYSQL *conn, char *org_id) {
 		cJSON *access_token = cJSON_GetObjectItem(root, "access_token");
 		api_token = (char*) access_token->valuestring;
 		sprintf(query, "UPDATE api SET token = '%s', token_updated = %d WHERE id = %d", api_token, time, api_id);
-		if (mysql_query(conn, query)) {
-			fprintf(stderr, "%s\n", mysql_error(conn));
-			exit(1);
+		if (mysql_query(conn, query)) { // do this even if READONLY_MODE is on bc it cant hurt to update the api token
+			error(mysql_error(conn), conn);
 		}
 		free(response.memory);
 		cJSON_free(root);
 	}
 	#endif
-	#if SKIP_API_TOKEN == 1
+	#if SKIP_API_TOKEN == 1 // I use this when testing with the fake meter #0
 	api_token[0] = '\0';
 	#endif
-}
-
-void update_meter_relative_value(int meter_id, char *grouping) {
-	printf("%d %s\n", meter_id, grouping);
 }
 
 /**
@@ -205,7 +259,6 @@ void update_meter_relative_value(int meter_id, char *grouping) {
  * @param meter_url  [description]
  */
 void update_meter(MYSQL *conn, int meter_id, char *meter_url) {
-	printf("%s %d\n", meter_url, meter_id);
 	time_t end_time; // end date
 	time_t last_recording; // start date
 	struct tm *ts;
@@ -217,18 +270,16 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url) {
 	// printf("%d %s\n", end_time, iso8601_time);
 	// Move the meter back in the queue to be tried again soon in case this function does not complete and the last_updated_col is not updated to the current time
 	char query[SMALL_CONTAINER];
-	sprintf(query, "UPDATE meters SET live_last_updated = %d WHERE id = %d", (int) end_time - MOVE_BACK_AMOUNT, meter_id);
+	sprintf(query, UPDATE_TIMESTAMP_COL, (int) end_time - MOVE_BACK_AMOUNT, meter_id);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
-		fprintf(stderr, "%s\n", mysql_error(conn));
-		exit(1);
+		error(mysql_error(conn), conn);
 	}
 	// Get the most recent recording. Data fetched from the API will start at last_recording and end at time
 	MYSQL_RES *res;
 	MYSQL_ROW row;
 	sprintf(query, "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded DESC LIMIT 1", meter_id, TARGET_RES);
 	if (mysql_query(conn, query)) {
-		fprintf(stderr, "%s\n", mysql_error(conn));
-		exit(1);
+		error(mysql_error(conn), conn);
 	}
 	res = mysql_store_result(conn);
 	row = mysql_fetch_row(res);
@@ -243,30 +294,24 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url) {
 	// printf("%d %s\n", (int) last_recording, iso8601_last_recording);
 	// Make call to the API for meter data
 	char post_data[SMALL_CONTAINER];
+	char sql_data[SMALL_CONTAINER];
 	sprintf(post_data, "resolution=%s&start=%s&end=%s", TARGET_RES, iso8601_last_recording, iso8601_time);
 	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0);
 	cJSON *root = cJSON_Parse(response.memory);
 	cJSON *data = cJSON_GetObjectItem(root, "data");
-	char sql_query[SMALL_CONTAINER];
-	char *sql_data;
 	// delete old data older than DATA_LIFESPAN and NULL data that was skipped over in the above query
 	sprintf(query, "DELETE FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND ((recorded < %d) OR (recorded >= %d AND value IS NULL))", meter_id, TARGET_RES, (int) end_time - DATA_LIFESPAN, (int) last_recording);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
-		fprintf(stderr, "%s\n", mysql_error(conn));
-		exit(1);
-	} else {printf("%s\n", query);}
+		error(mysql_error(conn), conn);
+	}
 	// insert new data
-	sql_data = malloc(sizeof(char) * SMALL_CONTAINER);
-	int sql_data_size = SMALL_CONTAINER;
-	sql_data[0] = '\0'; // so dont have to strcpy before strcat
 	double last_non_null = -9999.0; // error value
-	for (int i = 0; i < cJSON_GetArraySize(data); i++) { // process data
+	for (int i = 0; i < cJSON_GetArraySize(data); i++) {
 		cJSON *data_point = cJSON_GetArrayItem(data, i);
 		cJSON *data_point_val = cJSON_GetObjectItem(data_point, "value");
 		cJSON *data_point_time = cJSON_GetObjectItem(data_point, "localtime");
 		char val[10];
 		if (data_point_val->type == 4) {
-			// val = "NULL";
 			val[0] = 'N'; val[1] = 'U'; val[2] = 'L'; val[3] = 'L'; val[4] = '\0'; // srsly?
 		} else {
 			last_non_null = data_point_val->valuedouble;
@@ -278,89 +323,65 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url) {
 		if (strptime(data_point_time->valuestring, ISO8601_FORMAT, &ltm) != NULL) {
 			epoch = mktime(&ltm);
 		} else {
-			error("Unable to parse date");
+			error("Unable to parse date", conn);
 		}
-		sprintf(sql_query, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES (%d, %s, %d, '%s');\n", meter_id, val, (int) epoch, TARGET_RES);
-		strcat(sql_data, sql_query);
-		sql_data_size += SMALL_CONTAINER;
-		sql_data = realloc(sql_data, sizeof(char) * sql_data_size);
+		sprintf(sql_data, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES (%d, %s, %d, '%s')", meter_id, val, (int) epoch, TARGET_RES);
+		if (READONLY_MODE == 0 && mysql_query(conn, sql_data)) {
+			error(mysql_error(conn), conn);
+		}
 	}
-	if (READONLY_MODE == 0 && mysql_query(conn, sql_data)) {
-		fprintf(stderr, "%s\n", mysql_error(conn));
-		exit(1);
-	} else if (READONLY_MODE == 1) {
-		printf("%s\n", sql_data);
+	sprintf(query, UPDATE_TIMESTAMP_COL, (int) end_time, meter_id);
+	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
+		error(mysql_error(conn), conn);
 	}
-	free(sql_data);
-
-	#if CALC_RELATIVE_VALUES == 1
+	#if UPDATE_CURRENT == 1
 	if (last_non_null != -9999.0) {
+		query[0] = '\0';
 		sprintf(query, "UPDATE meters SET current = %f WHERE id = %d", last_non_null, meter_id);
 		if (READONLY_MODE == 0 && mysql_query(conn, query)) {
-			fprintf(stderr, "%s\n", mysql_error(conn));
-			exit(1);
-		} else {printf("%s\n", query);}
-		query[0] = '\0';
-		sprintf(query, "SELECT DISTINCT grouping FROM relative_values WHERE meter_uuid IN (SELECT bos_uuid FROM meters WHERE id = %d) AND grouping != '[]' AND grouping != '' AND grouping IS NOT NULL AND permission IS NOT NULL", meter_id);
-		printf("%s\n", query);
-		if (mysql_query(conn, query)) {
-			fprintf(stderr, "%s\n", mysql_error(conn));
-			exit(1);
-		}
-		res = mysql_store_result(conn);
-		while ((row = mysql_fetch_row(res))) {
-			update_meter_relative_value(meter_id, row[0]);
-		}
-		mysql_free_result(res);
-		query[0] = '\0';
-		sprintf(query, "UPDATE meters SET live_last_updated = %d WHERE id = %d", (int) end_time, meter_id);
-		if (READONLY_MODE == 0 && mysql_query(conn, query)) {
-			fprintf(stderr, "%s\n", mysql_error(conn));
-			exit(1);
+			error(mysql_error(conn), conn);
 		}
 	}
 	#endif
 }
 
 int main(void) {
+	daemonize();
+	buildingosd_pid = getpid();
+	syslog(LOG_NOTICE, "starting daemon %d", buildingosd_pid);
 	api_token = malloc(40*sizeof(char));
 	api_token[0] = '\0';
 	MYSQL *conn;
-	pid_t pid = getpid();
 	conn = mysql_init(NULL);
 	// Connect to database
 	if (!mysql_real_connect(conn, DB_SERVER,
-	DB_USER, DB_PASS, DB_NAME, 0, NULL, CLIENT_MULTI_STATEMENTS)) {
-		fprintf(stderr, "%s\n", mysql_error(conn));
-		exit(1);
+	DB_USER, DB_PASS, DB_NAME, 0, NULL, 0)) {
+		error(mysql_error(conn), conn);
 	}
 	// Insert record of daemon
 	char query[SMALL_CONTAINER];
-	sprintf(query, "INSERT INTO daemons (pid, enabled, target_res) VALUES (%d, %d, '%s')", pid, 0, TARGET_RES);
+	char query2[SMALL_CONTAINER];
+	sprintf(query, "INSERT INTO daemons (pid, enabled, target_res) VALUES (%d, %d, '%s')", buildingosd_pid, 1, TARGET_RES);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
-		fprintf(stderr, "%s\n", mysql_error(conn));
-		exit(1);
+		error(mysql_error(conn), conn);
 	}
-	sprintf(query, "SELECT enabled FROM daemons WHERE pid = %d", pid);
+	sprintf(query, "SELECT enabled FROM daemons WHERE pid = %d", buildingosd_pid);
 	while (1) {
 		MYSQL_RES *res;
 		MYSQL_ROW row;
 		MYSQL_ROW meter;
-		if (mysql_query(conn, query)) {
-			fprintf(stderr, "%s\n", mysql_error(conn));
-			exit(1);
-		}
-		res = mysql_use_result(conn);
-		row = mysql_fetch_row(res);
-		mysql_free_result(res);
 		if (READONLY_MODE == 0) {
+			if (mysql_query(conn, query)) {
+				error(mysql_error(conn), conn);
+			}
+			res = mysql_use_result(conn);
+			row = mysql_fetch_row(res);
+			mysql_free_result(res);
 			if (row == NULL) {
-				fprintf(stderr, "I should not exist.\n");
-				exit(1);
-			} else if (strcmp(row[0], "1") != 0) {
-				fprintf(stderr, "enabled column switched off\n");
-				cleanup(conn, pid);
-				break; // if enabled column turned off, exit
+				error("I should not exist", conn);
+			} else if (row[0][0] == '0') { //(strcmp(row[0], "1") != 0) {
+				syslog(LOG_NOTICE, "Enabled column switched off");
+				cleanup(conn); // if enabled column turned off, exit
 			}
 		}
 		char meter_url[SMALL_CONTAINER];
@@ -372,10 +393,32 @@ int main(void) {
 		strcat(meter_url, "/data");
 		int last_updated = atoi(meter[3]);
 		set_api_token(conn, org_id);
-		printf("%s %d\n", meter_url, meter_id);
-		update_meter(conn, meter_id, meter_url);
-		break;
+		sprintf(query2, "UPDATE daemons SET updating_meter = %d WHERE pid = %d", meter_id, buildingosd_pid);
+		if (READONLY_MODE == 0) {
+			if (mysql_query(conn, query2)) {
+				error(mysql_error(conn), conn);
+			}
+		}
+		struct timeval tv;
+		gettimeofday(&tv, NULL);
+		int time = tv.tv_sec;
+		if (last_updated > (time - MOVE_BACK_AMOUNT)) {
+			sleep(20);
+		}
+		pid_t childpid = fork();
+		if (childpid == -1) {
+			error("Failed to fork", conn);
+		} 
+		else if (childpid > 0) {
+			int status;
+			waitpid(childpid, &status, 0);
+		} else  { // we are the child
+			update_meter(conn, meter_id, meter_url);
+			exit(1);
+		}
+		// break;
 	}
+	cleanup(conn);
 	mysql_close(conn);
-	return 0;
+	return EXIT_SUCCESS;
 }
