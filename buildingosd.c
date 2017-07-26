@@ -37,6 +37,7 @@
 
 static char *api_token;
 static pid_t buildingosd_pid;
+
 /**
  * daemonizes a process by disconnecting it from the shell it was started in
  * See https://stackoverflow.com/questions/17954432/creating-a-daemon-in-linux
@@ -157,7 +158,7 @@ struct MemoryStruct http_request(char *url, char *post, int custom_header, int m
 		res = curl_easy_perform(curl);
 		/* Check for errors */ 
 		if (res != CURLE_OK) {
-			fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+			syslog(LOG_ERR, "curl_easy_perform() failed: %s", curl_easy_strerror(res));
 			exit(1);
 		}
 		curl_easy_cleanup(curl);
