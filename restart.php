@@ -10,9 +10,9 @@ $pop = 3;
 foreach ($db->query('SELECT pid FROM daemons WHERE enabled = 1') as $daemon) {
   if (!file_exists("/proc/{$daemon['pid']}")) { // process is not running, but is in db
     $db->query("DELETE FROM daemons WHERE pid = {$daemon['pid']}");
-    `/var/www/html/oberlin/daemons/buildingosd`;
+  } else {
+    $pop--;
   }
-  $pop--;
 }
 foreach ($db->query('SELECT pid FROM daemons WHERE enabled = 0') as $daemon) {
   if (file_exists("/proc/{$daemon['pid']}")) {
