@@ -21,6 +21,6 @@ foreach ($db->query('SELECT pid FROM daemons WHERE enabled = 0') as $daemon) {
   $db->query("DELETE FROM daemons WHERE pid = {$daemon['pid']}");
 }
 for ($i=0; $i < $pop; $i++) { 
-  `/var/www/html/oberlin/daemons/buildingosd`;
+  `/var/www/html/oberlin/daemons/buildingosd -d`;
 }
 ?>
