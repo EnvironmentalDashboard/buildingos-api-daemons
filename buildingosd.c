@@ -6,7 +6,7 @@
 
 #define _XOPEN_SOURCE // for strptime
 #define _GNU_SOURCE // for strptime
-#define PRIORITY_METER "SELECT id, org_id, url, live_last_updated FROM meters WHERE source = 'buildingos' AND live_last_updated < (UNIX_TIMESTAMP() - 240) AND (for_orb > 0 OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY live_last_updated ASC LIMIT 1"
+#define PRIORITY_METER "SELECT id, org_id, url, live_last_updated FROM meters WHERE source = 'buildingos' AND live_last_updated < (UNIX_TIMESTAMP() - 300) AND (for_orb > 0 OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY live_last_updated ASC LIMIT 1"
 #define LIVE_TARGET_METER "SELECT id, org_id, url, live_last_updated FROM meters WHERE source = 'buildingos' AND ((gauges_using > 0 OR for_orb > 0 OR timeseries_using > 0) OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY live_last_updated ASC LIMIT 1"
 #define QH_TARGET_METER "SELECT id, org_id, url, quarterhour_last_updated FROM meters WHERE source = 'buildingos' AND ((gauges_using > 0 OR for_orb > 0 OR timeseries_using > 0) OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY quarterhour_last_updated ASC LIMIT 1"
 #define HOUR_TARGET_METER "SELECT id, org_id, url, hour_last_updated FROM meters WHERE source = 'buildingos' AND ((gauges_using > 0 OR for_orb > 0 OR timeseries_using > 0) OR bos_uuid IN (SELECT DISTINCT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY hour_last_updated ASC LIMIT 1"
@@ -16,7 +16,8 @@
 #define UPDATE_HOUR_TIMESTAMP "UPDATE meters SET hour_last_updated = %d WHERE id = %d"
 #define UPDATE_MONTH_TIMESTAMP "UPDATE meters SET month_last_updated = %d WHERE id = %d"
 #define TOKEN_URL "https://api.buildingos.com/o/token/" // where to get the token from
-#define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S-04:00" // EST is -4:00
+#define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S%z"
+#define ISO8601_FORMAT_TZ "%Y-%m-%dT%H:%M:%S-04:00"
 #define SMALL_CONTAINER 255 // small fixed-size container for arrays
 #define LIVE_DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
 #define QH_DATA_LIFESPAN 1209600 // 2 weeks
@@ -43,6 +44,68 @@
 
 static pid_t buildingosd_pid;
 void cleanup(MYSQL *conn); // do this so error() knows about cleanup()
+
+/**
+ * Utility function copied from https://stackoverflow.com/a/779960/2624391
+ */
+char *str_replace(char *orig, char *rep, char *with) {
+	char *result; // the return string
+	char *ins;    // the next insert point
+	char *tmp;    // varies
+	int len_rep;  // length of rep (the string to remove)
+	int len_with; // length of with (the string to replace rep with)
+	int len_front; // distance between rep and end of last rep
+	int count;    // number of replacements
+
+	// sanity checks and initialization
+	if (!orig || !rep) {
+	    return NULL;
+	}
+	len_rep = strlen(rep);
+	if (len_rep == 0) {
+	    return NULL; // empty rep causes infinite loop during count
+	}
+	if (!with) {
+	    with = "";
+	}
+	len_with = strlen(with);
+
+	// count the number of replacements needed
+	ins = orig;
+	for (count = 0; (tmp = strstr(ins, rep)); ++count) {
+	    ins = tmp + len_rep;
+	}
+
+	tmp = result = malloc(strlen(orig) + (len_with - len_rep) * count + 1);
+
+	if (!result) {
+	    return NULL;
+	}
+
+	// first time through the loop, all the variable are set correctly
+	// from here on,
+	//    tmp points to the end of the result string
+	//    ins points to the next occurrence of rep in orig
+	//    orig points to the remainder of orig after "end of rep"
+	while (count--) {
+	    ins = strstr(orig, rep);
+	    len_front = ins - orig;
+	    tmp = strncpy(tmp, orig, len_front) + len_front;
+	    tmp = strcpy(tmp, with) + len_with;
+	    orig += len_front + len_rep; // move to next "end of rep"
+	}
+	strcpy(tmp, orig);
+	return result;
+}
+
+/**
+ * Signal handler
+ * @param signo [description]
+ */
+static void catch_signal(int signo) {
+	system("/var/www/html/oberlin/daemons/buildingosd -d");
+	syslog(LOG_ERR, "Caught pipe #%d; exiting", signo);
+}
 
 /**
  * daemonizes a process by disconnecting it from the shell it was started in
@@ -86,8 +149,6 @@ static void daemonize() {
 	for (x = sysconf(_SC_OPEN_MAX); x>=0; x--) {
 		close(x);
 	}
-	/* Open the log file */
-	openlog("buildingosd", LOG_PID, LOG_DAEMON);
 }
 
 
@@ -268,17 +329,20 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	char iso8601_start_time[30];
 	char query[SMALL_CONTAINER];
 	ts = localtime(&end_time);
-	strftime(iso8601_end_time, sizeof(iso8601_end_time), ISO8601_FORMAT, ts);
+	strftime(iso8601_end_time, sizeof(iso8601_end_time), ISO8601_FORMAT_TZ, ts);
 	// printf("%d %s\n", end_time, iso8601_end_time);
 	ts = localtime(&start_time);
-	strftime(iso8601_start_time, sizeof(iso8601_start_time), ISO8601_FORMAT, ts);
+	strftime(iso8601_start_time, sizeof(iso8601_start_time), ISO8601_FORMAT_TZ, ts);
 	// printf("%d %s\n", (int) start_time, iso8601_start_time);
 	// Make call to the API for meter data
 	char post_data[SMALL_CONTAINER];
 	char sql_data[SMALL_CONTAINER];
-	sprintf(post_data, "resolution=%s&start=%s&end=%s", resolution, iso8601_start_time, iso8601_end_time);
+	sprintf(post_data, "resolution=%s&start=%s&end=%s", resolution, str_replace(iso8601_start_time, ":", "%3A"), str_replace(iso8601_end_time, ":", "%3A"));
 	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0, api_token);
 	cJSON *root = cJSON_Parse(response.memory);
+	if (!cJSON_HasObjectItem(root, "data")) {
+		error(response.memory, conn);
+	}
 	cJSON *data = cJSON_GetObjectItem(root, "data");
 	// delete old data older than data_lifespan and NULL data that was skipped over in the above query
 	// sprintf(query, "DELETE FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND (recorded < %d)", meter_id, resolution, (int) time(NULL) - data_lifespan);//, (int) start_time);    OR (recorded >= %d AND value IS NULL)
@@ -291,9 +355,6 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	// insert new data
 	double last_non_null = -9999.0; // error value
 	for (int i = 0; i < cJSON_GetArraySize(data); i++) {
-		if (verbose) {
-			printf("%s\n", "loop");
-		}
 		cJSON *data_point = cJSON_GetArrayItem(data, i);
 		cJSON *data_point_val = cJSON_GetObjectItem(data_point, "value");
 		cJSON *data_point_time = cJSON_GetObjectItem(data_point, "localtime");
@@ -308,7 +369,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		struct tm ltm = {0};
 		time_t epoch = 0;
 		if (strptime(data_point_time->valuestring, ISO8601_FORMAT, &ltm) != NULL) {
-			epoch = mktime(&ltm);
+			epoch = mktime(&ltm) - 3600;
 		} else {
 			error("Unable to parse date", conn);
 		}
@@ -325,7 +386,6 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	if (last_non_null != -9999.0 && strcmp(resolution, "live") == 0) {
 		query[0] = '\0';
 		sprintf(query, "UPDATE meters SET current = %f WHERE id = %d", last_non_null, meter_id);
-		printf("%s\n", query);
 		if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 			error(mysql_error(conn), conn);
 		}
@@ -333,9 +393,12 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	#endif
 }
 
+// void launch_with_default_options() {
+// 	system("/var/www/html/oberlin/daemons/buildingosd -d");
+// }
+
 int main(int argc, char *argv[]) {
-	// atexit(cleanup);
-	// char *api_token;
+	// atexit(launch_with_default_options); // causes a crash
 	// data fetched spans from start_time to end_time
 	time_t end_time;
 	time_t start_time;
@@ -373,14 +436,16 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	if (d_flag) {
-		printf("Can't use -d and -v at same time; ignoring -v flag\n");
-		v_flag = 0;
+		if (v_flag) {
+			printf("Can't use -d and -v at same time; ignoring -v flag\n");
+			v_flag = 0;
+		}
 		daemonize();
 	}
 	if (r_flag == NULL) {
 		r_flag = "live";
 	}
-	// signal(SIGPIPE, SIG_IGN);
+	// interpret command line input
 	int live_res = 0;
 	if (strcmp(r_flag, "live") == 0) {
 		target_meter = LIVE_TARGET_METER;
@@ -411,9 +476,7 @@ int main(int argc, char *argv[]) {
 		printf("Please provide a proper resolution via the -r flag\n");
 		return 1;
 	}
-	buildingosd_pid = getpid();
-	// api_token = malloc(40*sizeof(char));
-	// api_token[0] = '\0';
+	buildingosd_pid = getpid(); // save this in a global so the children know
 	MYSQL *conn;
 	conn = mysql_init(NULL);
 	// Connect to database
@@ -427,20 +490,23 @@ int main(int argc, char *argv[]) {
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
 		error(mysql_error(conn), conn);
 	}
-	sprintf(query, "SELECT enabled FROM daemons WHERE pid = %d", buildingosd_pid); // dont modify query again
+	openlog("buildingosd", LOG_PID, LOG_DAEMON);
+	signal(SIGPIPE, catch_signal);
+	sprintf(query, "SELECT enabled FROM daemons WHERE pid = %d", buildingosd_pid); // dont modify query variable again
 	while (1) {
 		MYSQL_RES *res;
 		MYSQL_ROW row;
 		MYSQL_ROW meter;
 		time_t now = time(NULL);
 		if (READONLY_MODE == 0) {
-			if (mysql_query(conn, query)) {
+			// if the daemon is 'enabled' in the db
+			if (mysql_query(conn, query)) { // this line triggers a SIGPIPE?
 				error(mysql_error(conn), conn);
 			}
 			res = mysql_use_result(conn);
 			row = mysql_fetch_row(res);
 			mysql_free_result(res);
-			if (row == NULL) {
+			if (row == NULL) { // record of daemon does not exist
 				error("I should not exist", conn);
 			} else if (row[0][0] == '0') { //(strcmp(row[0], "1") != 0) {
 				// if enabled column turned off, exit
@@ -452,7 +518,7 @@ int main(int argc, char *argv[]) {
 				}
 			}
 		}
-		if (live_res) {
+		if (live_res) { // make sure the priority meters (i.e. the orbs) are always up to date
 			if (mysql_query(conn, PRIORITY_METER)) {
 				error(mysql_error(conn), conn);
 			}
@@ -460,7 +526,7 @@ int main(int argc, char *argv[]) {
 			meter = mysql_fetch_row(res);
 			mysql_free_result(res);
 		}
-		if (live_res == 0 || meter == NULL) {
+		if (live_res == 0 || meter == NULL) { // if the orbs are up to date or we're collecting non-minute resolution data
 			meter = fetch_row(conn, target_meter);
 		}
 		char meter_url[SMALL_CONTAINER];
@@ -470,7 +536,6 @@ int main(int argc, char *argv[]) {
 		strcat(meter_url, meter[2]);
 		strcat(meter_url, "/data");
 		int last_updated = atoi(meter[3]);
-		// api_token = ;
 		sprintf(tmp, "UPDATE daemons SET updating_meter = %d WHERE pid = %d", meter_id, buildingosd_pid);
 		if (READONLY_MODE == 0) {
 			if (mysql_query(conn, tmp)) {
@@ -534,6 +599,7 @@ int main(int argc, char *argv[]) {
 			int status;
 			waitpid(childpid, &status, 0);
 		} else { // we are the child
+			signal(SIGPIPE, catch_signal);
 			sprintf(tmp, update_timestamp_col, (int) now - move_back_amount, meter_id);
 			if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
