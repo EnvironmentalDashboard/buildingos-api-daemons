@@ -17,7 +17,7 @@
 #define UPDATE_MONTH_TIMESTAMP "UPDATE meters SET month_last_updated = %d WHERE id = %d"
 #define TOKEN_URL "https://api.buildingos.com/o/token/" // where to get the token from
 #define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S%z"
-#define ISO8601_FORMAT_TZ "%Y-%m-%dT%H:%M:%S-04:00"
+#define ISO8601_FORMAT_EST "%Y-%m-%dT%H:%M:%S-04:00"
 #define SMALL_CONTAINER 255 // small fixed-size container for arrays
 #define LIVE_DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
 #define QH_DATA_LIFESPAN 1209600 // 2 weeks
@@ -103,7 +103,7 @@ char *str_replace(char *orig, char *rep, char *with) {
  * @param signo [description]
  */
 static void catch_signal(int signo) {
-	system("/var/www/html/oberlin/daemons/buildingosd -d");
+	system("/var/www/html/oberlin/daemons/buildingosd -d"); // lol
 	syslog(LOG_ERR, "Caught pipe #%d; exiting", signo);
 }
 
@@ -329,10 +329,10 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	char iso8601_start_time[30];
 	char query[SMALL_CONTAINER];
 	ts = localtime(&end_time);
-	strftime(iso8601_end_time, sizeof(iso8601_end_time), ISO8601_FORMAT_TZ, ts);
+	strftime(iso8601_end_time, sizeof(iso8601_end_time), ISO8601_FORMAT_EST, ts);
 	// printf("%d %s\n", end_time, iso8601_end_time);
 	ts = localtime(&start_time);
-	strftime(iso8601_start_time, sizeof(iso8601_start_time), ISO8601_FORMAT_TZ, ts);
+	strftime(iso8601_start_time, sizeof(iso8601_start_time), ISO8601_FORMAT_EST, ts);
 	// printf("%d %s\n", (int) start_time, iso8601_start_time);
 	// Make call to the API for meter data
 	char post_data[SMALL_CONTAINER];
