@@ -343,22 +343,18 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		error(response.memory, conn);
 	}
 	cJSON *data = cJSON_GetObjectItem(root, "data");
-	// delete old data older than data_lifespan and NULL data that was skipped over in the above query
-	// sprintf(query, "DELETE FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND (recorded < %d)", meter_id, resolution, (int) time(NULL) - data_lifespan);//, (int) start_time);    OR (recorded >= %d AND value IS NULL)
-	// if (READONLY_MODE == 0 && mysql_query(conn, query)) {
-	// 	error(mysql_error(conn), conn);
-	// }
-	// if (verbose) {
-	// 	printf("%s\n", query);
-	// }
 	// insert new data
-	char sql_data[SMALL_CONTAINER];
-	int insert_sql_size = SMALL_CONTAINER;
-	char *insert_sql = malloc(sizeof(char) * SMALL_CONTAINER);
-	if (insert_sql == NULL) {
-		error("malloc returned NULL", conn);
+	// char sql_data[SMALL_CONTAINER];
+	FILE *buffer = fopen("/root/meter_data.csv", "a");
+	if (buffer == NULL) {
+	    error("Error opening meter_data buffer", conn);
 	}
-	strcpy(insert_sql, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES ");
+	// int insert_sql_size = SMALL_CONTAINER;
+	// char *insert_sql = malloc(sizeof(char) * SMALL_CONTAINER);
+	// if (insert_sql == NULL) {
+	// 	error("malloc returned NULL", conn);
+	// }
+	// strcpy(insert_sql, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES ");
 	int data_size = cJSON_GetArraySize(data);
 	double last_non_null = -9999.0; // error value
 	for (int i = 0; i < data_size; i++) {
@@ -367,10 +363,11 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		cJSON *data_point_time = cJSON_GetObjectItem(data_point, "localtime");
 		char val[10];
 		if (data_point_val->type == 4) {
-			val[0] = 'N'; val[1] = 'U'; val[2] = 'L'; val[3] = 'L'; val[4] = '\0'; // srsly?
+			// val[0] = 'N'; val[1] = 'U'; val[2] = 'L'; val[3] = 'L'; val[4] = '\0'; // srsly?
+			val[0] = '\\'; val[1] = 'N'; val[2] = '\0'; // https://stackoverflow.com/a/2675493
 		} else {
 			last_non_null = data_point_val->valuedouble;
-			sprintf(val, "%f", last_non_null);
+			sprintf(val, "%.3f", last_non_null);
 		}
 		// https://stackoverflow.com/a/1002631/2624391
 		struct tm ltm = {0};
@@ -380,28 +377,30 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		} else {
 			error("Unable to parse date", conn);
 		}
-		sprintf(sql_data, "(%d, %s, %d, '%s')", meter_id, val, (int) epoch, resolution);
-		strcat(insert_sql, sql_data);
-		if ((i + 1) == data_size) {
-			strcat(insert_sql, ";");
-		} else { // more data to process
-			strcat(insert_sql, ", ");
-			insert_sql_size += 70;
-			insert_sql = realloc(insert_sql, insert_sql_size);
+		fprintf(buffer, "%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
+		// sprintf(sql_data, "(%d, %s, %d, '%s')", meter_id, val, (int) epoch, resolution);
+		// strcat(insert_sql, sql_data);
+		// if ((i + 1) == data_size) {
+		// 	strcat(insert_sql, ";");
+		// } else { // more data to process
+		// 	strcat(insert_sql, ", ");
+		// 	insert_sql_size += 70;
+		// 	insert_sql = realloc(insert_sql, insert_sql_size);
+		// }
+		if (verbose) {
+			printf("\"%d\", \"%s\", \"%d\", \"%s\"\n", meter_id, val, (int) epoch, resolution);
 		}
 	}
-	if (READONLY_MODE == 0 && mysql_query(conn, insert_sql)) {
-		error(mysql_error(conn), conn);
-	}
-	if (verbose) {
-		printf("%s\n", insert_sql);
-	}
-	free(insert_sql);
+	fclose(buffer);
+	// if (READONLY_MODE == 0 && mysql_query(conn, insert_sql)) {
+	// 	error(mysql_error(conn), conn);
+	// }
+	// free(insert_sql);
 	free(response.memory);
 	#if UPDATE_CURRENT == 1
 	if (last_non_null != -9999.0 && strcmp(resolution, "live") == 0) {
 		query[0] = '\0';
-		sprintf(query, "UPDATE meters SET current = %f WHERE id = %d", last_non_null, meter_id);
+		sprintf(query, "UPDATE meters SET current = %.3f WHERE id = %d", last_non_null, meter_id);
 		if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 			error(mysql_error(conn), conn);
 		}
@@ -571,7 +570,7 @@ int main(int argc, char *argv[]) {
 		if (live_res) {
 			// if live res, fetch data spanning from the latest point recorded in the db to now
 			end_time = now;
-			sprintf(tmp, "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
+			sprintf(tmp, "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
@@ -587,7 +586,7 @@ int main(int argc, char *argv[]) {
 			// if other res, only make sure data goes back as far as it's supposed to
 			// i.e. fetch data spanning from data_lifespan to the earliest point recorded in the db
 			start_time = now - (time_t) data_lifespan;
-			sprintf(tmp, "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
+			sprintf(tmp, "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
