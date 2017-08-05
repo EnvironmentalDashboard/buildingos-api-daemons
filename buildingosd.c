@@ -336,7 +336,6 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	// printf("%d %s\n", (int) start_time, iso8601_start_time);
 	// Make call to the API for meter data
 	char post_data[SMALL_CONTAINER];
-	char sql_data[SMALL_CONTAINER];
 	sprintf(post_data, "resolution=%s&start=%s&end=%s", resolution, str_replace(iso8601_start_time, ":", "%3A"), str_replace(iso8601_end_time, ":", "%3A"));
 	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0, api_token);
 	cJSON *root = cJSON_Parse(response.memory);
@@ -353,8 +352,16 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	// 	printf("%s\n", query);
 	// }
 	// insert new data
+	char sql_data[SMALL_CONTAINER];
+	int insert_sql_size = SMALL_CONTAINER;
+	char *insert_sql = malloc(sizeof(char) * SMALL_CONTAINER);
+	if (insert_sql == NULL) {
+		error("malloc returned NULL", conn);
+	}
+	strcpy(insert_sql, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES ");
+	int data_size = cJSON_GetArraySize(data);
 	double last_non_null = -9999.0; // error value
-	for (int i = 0; i < cJSON_GetArraySize(data); i++) {
+	for (int i = 0; i < data_size; i++) {
 		cJSON *data_point = cJSON_GetArrayItem(data, i);
 		cJSON *data_point_val = cJSON_GetObjectItem(data_point, "value");
 		cJSON *data_point_time = cJSON_GetObjectItem(data_point, "localtime");
@@ -373,14 +380,23 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		} else {
 			error("Unable to parse date", conn);
 		}
-		sprintf(sql_data, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES (%d, %s, %d, '%s')", meter_id, val, (int) epoch, resolution);
-		if (READONLY_MODE == 0 && mysql_query(conn, sql_data)) {
-			error(mysql_error(conn), conn);
-		}
-		if (verbose) {
-			printf("%s\n", sql_data);
+		sprintf(sql_data, "(%d, %s, %d, '%s')", meter_id, val, (int) epoch, resolution);
+		strcat(insert_sql, sql_data);
+		if ((i + 1) == data_size) {
+			strcat(insert_sql, ";");
+		} else { // more data to process
+			strcat(insert_sql, ", ");
+			insert_sql_size += 70;
+			insert_sql = realloc(insert_sql, insert_sql_size);
 		}
 	}
+	if (READONLY_MODE == 0 && mysql_query(conn, insert_sql)) {
+		error(mysql_error(conn), conn);
+	}
+	if (verbose) {
+		printf("%s\n", insert_sql);
+	}
+	free(insert_sql);
 	free(response.memory);
 	#if UPDATE_CURRENT == 1
 	if (last_non_null != -9999.0 && strcmp(resolution, "live") == 0) {
