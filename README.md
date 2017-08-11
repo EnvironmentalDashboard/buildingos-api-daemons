@@ -14,11 +14,11 @@ The purpose of the [BuildingOS](1) API daemon (`buildingosd`) is to perpetually 
 ---
 
 ## Installation
-To collect data from the BuildingOS API using `buildingosd`, you must compile the program, have a similar database schema, and install some cron jobs.
+To collect data from the BuildingOS API using `buildingosd`, you must compile the program, have a similar database schema, and install some [cron jobs](#crons).
 #### Compiling
 Before compiling, you will have to define the `db.h` file which contains the definitions for connecting to the MYSQL server. An example `db.h` file would look like this:
 
-```
+```cpp
 #define DB_SERVER "localhost"
 #define DB_USER "user"
 #define DB_PASS "1234"
@@ -30,7 +30,7 @@ If your compiler can not find `mysql.h` (assuming you have it installed), you ma
 
 - `daemons` (used to track daemons and sync multiple instances)
 
-    ```
+    ```sql
     CREATE TABLE `daemons` (
       `pid` int(11) NOT NULL DEFAULT '0',
       `enabled` tinyint(1) NOT NULL DEFAULT '0',
@@ -41,11 +41,11 @@ If your compiler can not find `mysql.h` (assuming you have it installed), you ma
     ALTER TABLE `daemons`
       ADD PRIMARY KEY (`pid`);
     ```
-Note that if you run multiple instances of `buildingosd` on multiple machines, `pid` can not be used as the primary key as it is possible for a two programs running on two different machines to have the same `pid`.
+    Note that if you run multiple instances of `buildingosd` on multiple machines, `pid` can not be used as the primary key as it is possible for a two programs running on two different machines to have the same `pid`.
 
 - `meters` (stores meter meta data such as meter names)
 
-    ```
+    ```sql
     CREATE TABLE `meters` (
       `id` int(11) NOT NULL,
       `org_id` int(11) NOT NULL DEFAULT '0',
@@ -69,7 +69,7 @@ Note that if you run multiple instances of `buildingosd` on multiple machines, `
 
 - `meter_data` (you guessed it, stores meter data)
 
-    ```
+    ```sql
     CREATE TABLE `meter_data` (
       `id` int(11) UNSIGNED NOT NULL,
       `meter_id` bigint(11) NOT NULL,
@@ -85,7 +85,7 @@ Note that if you run multiple instances of `buildingosd` on multiple machines, `
 
 - `orgs` ([Organizations](4) are the top level building hierarchy in BuildingOS. They associate API credentials with buildings and meters)
 
-    ```
+    ```sql
     CREATE TABLE `orgs` (
       `id` int(11) NOT NULL,
       `api_id` int(11) NOT NULL DEFAULT '0',
@@ -98,7 +98,7 @@ Note that if you run multiple instances of `buildingosd` on multiple machines, `
     ```
 - `api` (Contains the API credentials associated with each organization)
 
-    ```
+    ```sql
     CREATE TABLE `api` (
       `id` int(11) NOT NULL,
       `user_id` int(11) NOT NULL DEFAULT '0',
@@ -124,13 +124,13 @@ Some cron jobs need to be run to maintain the system.
 
 - Keep the daemons alive (TODO: rewrite as bash script)
 
-    ```
+    ```bash
     * * * * * php /var/www/html/oberlin/daemons/restart.php >/dev/null 2>&1
     ```
 
 - Import data into the database from a CSV every 20 seconds (`INSERT`s are a bottleneck for the CPU, so `buildingosd` will write the data to a CSV file instead of directly `INSERT`ing the data)
 
-    ```
+    ```bash
     * * * * * mysql -uuser -p1234 -hlocalhost dbname -e "LOAD DATA LOCAL INFILE '/root/meter_data.csv' INTO TABLE meter_data FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' (meter_id, value, recorded, resolution);" >/dev/null 2>&1 && rm /root/meter_data.csv
     * * * * * sleep 20 && mysql -uuser -p1234 -hlocalhost dbname -e "LOAD DATA LOCAL INFILE '/root/meter_data.csv' INTO TABLE meter_data FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' (meter_id, value, recorded, resolution);" >/dev/null 2>&1 && rm /root/meter_data.csv
     * * * * * sleep 40 && mysql -uuser -p1234 -hlocalhost dbname -e "LOAD DATA LOCAL INFILE '/root/meter_data.csv' INTO TABLE meter_data FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' (meter_id, value, recorded, resolution);" >/dev/null 2>&1 && rm /root/meter_data.csv
@@ -138,7 +138,7 @@ Some cron jobs need to be run to maintain the system.
 
 - Delete old data
 
-    ```
+    ```bash
     # live res is normally stored for 2 hours but actually lets keep it a little longer i.e. 24 hours
     */2 * * * * mysql -sN -uuser -p1234 -hlocalhost dbname -e "DELETE FROM meter_data WHERE resolution = 'live' AND recorded < (UNIX_TIMESTAMP() - 86400)" >/dev/null 2>&1
     */15 * * * * mysql -sN -uuser -p1234 -hlocalhost dbname -e "DELETE FROM meter_data WHERE resolution = 'quarterhour' AND recorded < (UNIX_TIMESTAMP() - 1209600)" >/dev/null 2>&1
@@ -148,7 +148,7 @@ Some cron jobs need to be run to maintain the system.
 
 - Calculate non-live resolutions
 
-    ```
+    ```bash
     */15 * * * * mysql -sN -uuser -p1234 -hlocalhost dbname -e "INSERT INTO meter_data (meter_id, \`value\`, recorded, resolution) SELECT meter_id, AVG(\`value\`), TRUNCATE(UNIX_TIMESTAMP() - 900, -2), 'quarterhour' FROM meter_data WHERE recorded > TRUNCATE((UNIX_TIMESTAMP() - 900), -2) AND resolution = 'live' GROUP BY meter_id" >/dev/null 2>&1
     0 * * * * mysql -sN -uuser -p1234 -hlocalhost dbname -e "INSERT INTO meter_data (meter_id, \`value\`, recorded, resolution) SELECT meter_id, AVG(\`value\`), TRUNCATE(UNIX_TIMESTAMP() - 3600, -2), 'hour' FROM meter_data WHERE recorded > TRUNCATE((UNIX_TIMESTAMP() - 3600), -2) AND resolution = 'live' GROUP BY meter_id" >/dev/null 2>&1
     0 0 1 * * mysql -sN -uuser -p1234 -hlocalhost dbname -e "INSERT INTO meter_data (meter_id, \`value\`, recorded, resolution) SELECT meter_id, AVG(\`value\`), TRUNCATE(UNIX_TIMESTAMP() - 2592000, -2), 'month' FROM meter_data WHERE recorded > TRUNCATE((UNIX_TIMESTAMP() - 2592000), -2) AND resolution != 'live' GROUP BY meter_id" >/dev/null 2>&1
