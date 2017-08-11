@@ -18,6 +18,7 @@
 #define TOKEN_URL "https://api.buildingos.com/o/token/" // where to get the token from
 #define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S%z"
 #define ISO8601_FORMAT_EST "%Y-%m-%dT%H:%M:%S-04:00"
+#define BUFFER_FILE "/root/meter_data.csv"
 #define SMALL_CONTAINER 255 // small fixed-size container for arrays
 #define LIVE_DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
 #define QH_DATA_LIFESPAN 1209600 // 2 weeks
@@ -44,6 +45,11 @@
 
 static pid_t buildingosd_pid;
 void cleanup(MYSQL *conn); // do this so error() knows about cleanup()
+// Stores page downloaded by http_request()
+struct MemoryStruct {
+	char *memory;
+	size_t size;
+};
 
 /**
  * Utility function copied from https://stackoverflow.com/a/779960/2624391
@@ -150,13 +156,6 @@ static void daemonize() {
 		close(x);
 	}
 }
-
-
-// Stores page downloaded by http_request()
-struct MemoryStruct {
-	char *memory;
-	size_t size;
-};
 
 /**
  * Helper for http_request()
@@ -345,7 +344,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	cJSON *data = cJSON_GetObjectItem(root, "data");
 	// insert new data
 	// char sql_data[SMALL_CONTAINER];
-	FILE *buffer = fopen("/root/meter_data.csv", "a");
+	FILE *buffer = fopen(BUFFER_FILE, "a");
 	if (buffer == NULL) {
 	    error("Error opening meter_data buffer", conn);
 	}
@@ -388,7 +387,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		// 	insert_sql = realloc(insert_sql, insert_sql_size);
 		// }
 		if (verbose) {
-			printf("\"%d\", \"%s\", \"%d\", \"%s\"\n", meter_id, val, (int) epoch, resolution);
+			printf("%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
 		}
 	}
 	fclose(buffer);
