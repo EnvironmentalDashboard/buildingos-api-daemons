@@ -153,11 +153,18 @@ Some cron jobs need to be run to maintain the system.
     0 0 1 * * mysql -sN -uuser -p1234 -hlocalhost dbname -e "INSERT INTO meter_data (meter_id, \`value\`, recorded, resolution) SELECT meter_id, AVG(\`value\`), TRUNCATE(UNIX_TIMESTAMP() - 2592000, -2), 'month' FROM meter_data WHERE recorded > TRUNCATE((UNIX_TIMESTAMP() - 2592000), -2) AND resolution != 'live' GROUP BY meter_id" >/dev/null 2>&1
     ```
 
----
 
 ## Known issues
-There are a number of memory leaks, which will cause an eventual crash.
+There are a few memory leaks which will cause an eventual crash. Running `valgrind --leak-check=yes -v ./buildingosd -o` generates the following summary:
 
+```
+LEAK SUMMARY:
+   definitely lost: 248 bytes in 1 blocks
+   indirectly lost: 8,352 bytes in 2 blocks
+     possibly lost: 8,424 bytes in 3 blocks
+   still reachable: 80,880 bytes in 3 blocks
+        suppressed: 0 bytes in 0 blocks
+```
 Often, it seems that the program will recieve a `SIGPIPE` when executing a MySQL query. This causes the program to termintate, but before it does, it will launch another instance of itself.
 
 
