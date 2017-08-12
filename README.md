@@ -10,11 +10,9 @@ The purpose of the [BuildingOS](1) API daemon (`buildingosd`) is to perpetually 
 - `-v` (**v**erbose): If set, the program will print what it is doing. As the `-d` option involves disconnecting I/O from the TTY, `-v` and `-d` can not be used together.
 
 
----
-
 ## Installation
 To collect data from the BuildingOS API using `buildingosd`, you must compile the program, have a similar database schema, and install some [cron jobs](#crons).
-#### Compiling
+### Compiling
 Before compiling, you will have to define the `db.h` file which contains the definitions for connecting to the MYSQL server. An example `db.h` file would look like this:
 
 ```cpp
@@ -24,7 +22,7 @@ Before compiling, you will have to define the `db.h` file which contains the def
 #define DB_NAME "dbname"
 ```
 If your compiler can not find `mysql.h` (assuming you have it installed), you may have to [compile with](3) the `-I` flag and define a path for `gcc` to check e.g. `-I/usr/include/mysql`. If you do not have have libcurl installed, you will need to run `apt-get install libcurl4-openssl-dev`. After that, just `make all`.
-#### Database schema
+### Database schema
 `buildingosd` assumes 4 tables exist.
 
 - `daemons` (used to track daemons and sync multiple instances)
@@ -118,13 +116,13 @@ Finally, the `*_TARGET_METER` definitions will probably have to be tweaked to co
 
 In reality these tables have more columns than listed (which is why the `*_TARGET_METER` definitions must be tweaked), but for the sake of simplicity only the necessary columns are shown.
 
-#### Crons
+### Crons
 Some cron jobs need to be run to maintain the system.
 
-- Keep the daemons alive (TODO: rewrite as bash script)
+- Keep the daemons alive (`restart.sh` requires you create `db.sh` which contains the variables `server`, `user`, `pass`, and `name` of the mysql credentials)
 
     ```bash
-    * * * * * php /var/www/html/oberlin/daemons/restart.php >/dev/null 2>&1
+    * * * * * /var/www/html/oberlin/daemons/restart.sh >/dev/null 2>&1
     ```
 
 - Import data into the database from a CSV every 20 seconds (`INSERT`s are a bottleneck for the CPU, so `buildingosd` will write the data to a CSV file instead of directly `INSERT`ing the data)

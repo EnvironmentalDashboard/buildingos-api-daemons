@@ -109,7 +109,10 @@ char *str_replace(char *orig, char *rep, char *with) {
  * @param signo [description]
  */
 static void catch_signal(int signo) {
-	system("/var/www/html/oberlin/daemons/buildingosd -d"); // lol
+	int success = system("/var/www/html/oberlin/daemons/buildingosd -d"); // lol
+	if (success == -1) {
+		syslog(LOG_ERR, "Unable to relaunch self");
+	}
 	syslog(LOG_ERR, "Caught pipe #%d; exiting", signo);
 }
 
@@ -138,9 +141,9 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
  * @param method        1 if POST, 0 if GET
  */
 struct MemoryStruct http_request(char *url, char *post, int custom_header, int method, char *api_token) {
-	char header[50];
+	char header[SMALL_CONTAINER];
 	if (custom_header) {
-		sprintf(header, "Authorization: Bearer %s", api_token);
+		snprintf(header, sizeof(header), "Authorization: Bearer %s", api_token);
 	}
 	CURL *curl;
 	CURLcode res;
@@ -202,7 +205,7 @@ void error(const char *msg, MYSQL *conn) {
  */
 void cleanup(MYSQL *conn) {
 	char query[SMALL_CONTAINER];
-	sprintf(query, "DELETE FROM daemons WHERE pid = %d", buildingosd_pid);
+	snprintf(query, sizeof(query), "DELETE FROM daemons WHERE pid = %d", buildingosd_pid);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 		syslog(LOG_ERR, "%s", mysql_error(conn));
 	}
@@ -239,9 +242,9 @@ MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
 char *set_api_token(MYSQL *conn, char *org_id) {
 	char query[SMALL_CONTAINER];
 	MYSQL_ROW row;
-	sprintf(query, "SELECT api_id FROM orgs WHERE id = %s", org_id);
+	snprintf(query, sizeof(query), "SELECT api_id FROM orgs WHERE id = %s", org_id);
 	int api_id = atoi(fetch_row(conn, query)[0]);
-	sprintf(query, "SELECT token, token_updated FROM api WHERE id = %d", api_id);
+	snprintf(query, sizeof(query), "SELECT token, token_updated FROM api WHERE id = %d", api_id);
 	row = fetch_row(conn, query);
 	int update_token_at = atoi(row[1]) + 3595;
 	struct timeval tv;
@@ -250,15 +253,15 @@ char *set_api_token(MYSQL *conn, char *org_id) {
 	if (update_token_at > time) { // token still not expired
 		return row[0]; // Invalid read of size 8
 	} else { // amortized cost; need to get new API token
-		sprintf(query, "SELECT client_id, client_secret, username, password FROM api WHERE id = '%d'", api_id);
+		snprintf(query, sizeof(query), "SELECT client_id, client_secret, username, password FROM api WHERE id = '%d'", api_id);
 		row = fetch_row(conn, query);
 		char post_data[SMALL_CONTAINER];
-		sprintf(post_data, "client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password", row[0], row[1], row[2], row[3]);
+		snprintf(post_data, sizeof(post_data), "client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password", row[0], row[1], row[2], row[3]);
 		struct MemoryStruct response = http_request(TOKEN_URL, post_data, 0, 1, "");
 		cJSON *root = cJSON_Parse(response.memory);
 		cJSON *access_token = cJSON_GetObjectItem(root, "access_token");
 		char *api_token = access_token->valuestring;
-		sprintf(query, "UPDATE api SET token = '%s', token_updated = %d WHERE id = %d", api_token, time, api_id);
+		snprintf(query, sizeof(query), "UPDATE api SET token = '%s', token_updated = %d WHERE id = %d", api_token, time, api_id);
 		if (mysql_query(conn, query)) { // do this even if READONLY_MODE is on bc it cant hurt to update the api token
 			error(mysql_error(conn), conn);
 		}
@@ -293,7 +296,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	char post_data[SMALL_CONTAINER];
 	char *encoded_iso8601_start_time = str_replace(iso8601_start_time, ":", "%3A");
 	char *encoded_iso8601_end_time = str_replace(iso8601_end_time, ":", "%3A");
-	sprintf(post_data, "resolution=%s&start=%s&end=%s", resolution, encoded_iso8601_start_time, encoded_iso8601_end_time);
+	snprintf(post_data, sizeof(post_data), "resolution=%s&start=%s&end=%s", resolution, encoded_iso8601_start_time, encoded_iso8601_end_time);
 	free(encoded_iso8601_start_time);
 	free(encoded_iso8601_end_time);
 	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0, api_token);
@@ -326,7 +329,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 			val[0] = '\\'; val[1] = 'N'; val[2] = '\0'; // https://stackoverflow.com/a/2675493
 		} else {
 			last_non_null = data_point_val->valuedouble;
-			sprintf(val, "%.3f", last_non_null);
+			snprintf(val, sizeof(val), "%.3f", last_non_null);
 		}
 		// https://stackoverflow.com/a/1002631/2624391
 		struct tm ltm = {0};
@@ -337,7 +340,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 			error("Unable to parse date", conn);
 		}
 		fprintf(buffer, "%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
-		// sprintf(sql_data, "(%d, %s, %d, '%s')", meter_id, val, (int) epoch, resolution);
+		// snprintf(sql_data, sizeof(sql_data), "(%d, %s, %d, '%s')", meter_id, val, (int) epoch, resolution);
 		// strcat(insert_sql, sql_data);
 		// if ((i + 1) == data_size) {
 		// 	strcat(insert_sql, ";");
@@ -360,7 +363,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	#if UPDATE_CURRENT == 1
 	if (last_non_null != -9999.0 && strcmp(resolution, "live") == 0) {
 		query[0] = '\0';
-		sprintf(query, "UPDATE meters SET current = %.3f WHERE id = %d", last_non_null, meter_id);
+		snprintf(query, sizeof(query), "UPDATE meters SET current = %.3f WHERE id = %d", last_non_null, meter_id);
 		if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 			error(mysql_error(conn), conn);
 		}
@@ -368,12 +371,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	#endif
 }
 
-// void launch_with_default_options() {
-// 	system("/var/www/html/oberlin/daemons/buildingosd -d");
-// }
-
 int main(int argc, char *argv[]) {
-	// atexit(launch_with_default_options); // causes a crash
 	// data fetched spans from start_time to end_time
 	time_t end_time;
 	time_t start_time;
@@ -410,17 +408,27 @@ int main(int argc, char *argv[]) {
 				break;
 		}
 	}
+	// connect to db
+	MYSQL *conn;
+	conn = mysql_init(NULL);
+	// Connect to database
+	if (!mysql_real_connect(conn, DB_SERVER,
+	DB_USER, DB_PASS, DB_NAME, 0, NULL, 0)) {
+		error(mysql_error(conn), conn);
+	}
+	// interpret command line input
 	if (d_flag) {
 		if (v_flag) {
 			printf("Can't use -d and -v at same time; ignoring -v flag\n");
 			v_flag = 0;
 		}
-		daemon(1, 0); // http://man7.org/linux/man-pages/man3/daemon.3.html
+		if (daemon(1, 0) == -1) { // http://man7.org/linux/man-pages/man3/daemon.3.html
+			error("Failed to daemonize", conn);
+		}
 	}
 	if (r_flag == NULL) {
 		r_flag = "live";
 	}
-	// interpret command line input
 	int live_res = 0;
 	if (strcmp(r_flag, "live") == 0) {
 		target_meter = LIVE_TARGET_METER;
@@ -452,22 +460,15 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	buildingosd_pid = getpid(); // save this in a global so the children know
-	MYSQL *conn;
-	conn = mysql_init(NULL);
-	// Connect to database
-	if (!mysql_real_connect(conn, DB_SERVER,
-	DB_USER, DB_PASS, DB_NAME, 0, NULL, 0)) {
-		error(mysql_error(conn), conn);
-	}
 	// Insert record of daemon
 	char query[SMALL_CONTAINER];
-	sprintf(query, "INSERT INTO daemons (pid, enabled, target_res) VALUES (%d, %d, '%s')", buildingosd_pid, 1, r_flag);
+	snprintf(query, sizeof(query), "INSERT INTO daemons (pid, enabled, target_res) VALUES (%d, %d, '%s')", buildingosd_pid, 1, r_flag);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
 		error(mysql_error(conn), conn);
 	}
 	openlog("buildingosd", LOG_PID, LOG_DAEMON);
 	signal(SIGPIPE, catch_signal);
-	sprintf(query, "SELECT enabled FROM daemons WHERE pid = %d", buildingosd_pid); // dont modify query variable again
+	snprintf(query, sizeof(query), "SELECT enabled FROM daemons WHERE pid = %d", buildingosd_pid); // dont modify query variable again
 	while (1) {
 		MYSQL_RES *res;
 		MYSQL_ROW row;
@@ -511,7 +512,7 @@ int main(int argc, char *argv[]) {
 		strcat(meter_url, meter[2]);
 		strcat(meter_url, "/data");
 		int last_updated = atoi(meter[3]);
-		sprintf(tmp, "UPDATE daemons SET updating_meter = %d WHERE pid = %d", meter_id, buildingosd_pid);
+		snprintf(tmp, sizeof(tmp), "UPDATE daemons SET updating_meter = %d WHERE pid = %d", meter_id, buildingosd_pid);
 		if (READONLY_MODE == 0) {
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
@@ -530,7 +531,7 @@ int main(int argc, char *argv[]) {
 		if (live_res) {
 			// if live res, fetch data spanning from the latest point recorded in the db to now
 			end_time = now;
-			sprintf(tmp, "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
+			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
@@ -546,7 +547,7 @@ int main(int argc, char *argv[]) {
 			// if other res, only make sure data goes back as far as it's supposed to
 			// i.e. fetch data spanning from data_lifespan to the earliest point recorded in the db
 			start_time = now - (time_t) data_lifespan;
-			sprintf(tmp, "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
+			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
@@ -559,7 +560,7 @@ int main(int argc, char *argv[]) {
 				end_time = (time_t) atoi(row[0]);
 				mysql_free_result(res);
 				if (end_time < ((now - data_lifespan) + secs_in_res)) { // if the end time goes as far back as we store data for, mark meter as updated and continue
-					sprintf(tmp, update_timestamp_col, (int) now, meter_id);
+					snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now, meter_id);
 					if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 						error(mysql_error(conn), conn);
 					}
@@ -576,12 +577,12 @@ int main(int argc, char *argv[]) {
 			waitpid(childpid, &status, 0);
 		} else { // we are the child
 			signal(SIGPIPE, catch_signal);
-			sprintf(tmp, update_timestamp_col, (int) now - move_back_amount, meter_id);
+			snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now - move_back_amount, meter_id);
 			if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
 			update_meter(conn, meter_id, meter_url, set_api_token(conn, org_id), r_flag, start_time, end_time, v_flag);
-			sprintf(tmp, update_timestamp_col, (int) now, meter_id);
+			snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now, meter_id);
 			if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}

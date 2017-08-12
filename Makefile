@@ -1,7 +1,7 @@
 CC=gcc
 # https://stackoverflow.com/questions/1778538/how-many-gcc-optimization-levels-are-there
 # -ggdb3 is for valgrind, -g option is for gdb debugger; remove in production
-CFLAGS=-g -pedantic -std=c99 -Wall -Wextra -ggdb3 -std=gnu11
+CFLAGS=-Og -pedantic -std=c99 -Wall -Wextra -ggdb3 -std=gnu11
 LFLAGS=-lcurl
 MYSQL_CONFIG=`mysql_config --cflags --libs`
 
