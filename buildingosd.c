@@ -20,6 +20,7 @@
 #define ISO8601_FORMAT_EST "%Y-%m-%dT%H:%M:%S-04:00"
 #define BUFFER_FILE "/root/meter_data.csv"
 #define SMALL_CONTAINER 255 // small fixed-size container for arrays
+#define MED_CONTAINER 510 // just double SMALL_CONTAINER
 #define LIVE_DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
 #define QH_DATA_LIFESPAN 1209600 // 2 weeks
 #define HOUR_DATA_LIFESPAN 5184000 // 2 months
@@ -34,6 +35,7 @@
 #include <mysql.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/prctl.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <syslog.h>
@@ -44,7 +46,6 @@
 #include "db.h"
 
 static pid_t buildingosd_pid;
-void cleanup(MYSQL *conn); // do this so error() knows about cleanup()
 // Stores page downloaded by http_request()
 struct MemoryStruct {
 	char *memory;
@@ -193,14 +194,6 @@ struct MemoryStruct http_request(char *url, char *post, int custom_header, int m
 }
 
 /**
- * Handle errors
- */
-void error(const char *msg, MYSQL *conn) {
-	syslog(LOG_ERR, "%s", msg);
-	cleanup(conn);
-}
-
-/**
  * Execute before program termination
  */
 void cleanup(MYSQL *conn) {
@@ -215,6 +208,14 @@ void cleanup(MYSQL *conn) {
 }
 
 /**
+ * Handle errors
+ */
+void error(const char *msg, MYSQL *conn) {
+	syslog(LOG_ERR, "%s", msg);
+	cleanup(conn);
+}
+
+/**
  * Fetches a single record, terminating the program if there are no results
  */
 MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
@@ -223,7 +224,6 @@ MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
 	if (mysql_query(conn, query)) {
 		error(mysql_error(conn), conn);
 	}
-	// res = mysql_use_result(conn); // this doesnt work?
 	res = mysql_store_result(conn);
 	row = mysql_fetch_row(res);
 	// mysql_free_result(res);
@@ -255,7 +255,7 @@ char *set_api_token(MYSQL *conn, char *org_id) {
 	} else { // amortized cost; need to get new API token
 		snprintf(query, sizeof(query), "SELECT client_id, client_secret, username, password FROM api WHERE id = '%d'", api_id);
 		row = fetch_row(conn, query);
-		char post_data[SMALL_CONTAINER];
+		char post_data[MED_CONTAINER];
 		snprintf(post_data, sizeof(post_data), "client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password", row[0], row[1], row[2], row[3]);
 		struct MemoryStruct response = http_request(TOKEN_URL, post_data, 0, 1, "");
 		cJSON *root = cJSON_Parse(response.memory);
@@ -288,10 +288,8 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	char query[SMALL_CONTAINER];
 	ts = localtime(&end_time);
 	strftime(iso8601_end_time, sizeof(iso8601_end_time), ISO8601_FORMAT_EST, ts);
-	// printf("%d %s\n", end_time, iso8601_end_time);
 	ts = localtime(&start_time);
 	strftime(iso8601_start_time, sizeof(iso8601_start_time), ISO8601_FORMAT_EST, ts);
-	// printf("%d %s\n", (int) start_time, iso8601_start_time);
 	// Make call to the API for meter data
 	char post_data[SMALL_CONTAINER];
 	char *encoded_iso8601_start_time = str_replace(iso8601_start_time, ":", "%3A");
@@ -335,7 +333,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		struct tm ltm = {0};
 		time_t epoch = 0;
 		if (strptime(data_point_time->valuestring, ISO8601_FORMAT, &ltm) != NULL) {
-			epoch = mktime(&ltm) - 3600;
+			epoch = mktime(&ltm) - 3600; // TODO: fix -- seems to be some problem with daylight savings time, have to subtract an hour to get right time
 		} else {
 			error("Unable to parse date", conn);
 		}
@@ -372,6 +370,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 }
 
 int main(int argc, char *argv[]) {
+	int argv0size = strlen(argv[0]);
 	// data fetched spans from start_time to end_time
 	time_t end_time;
 	time_t start_time;
@@ -576,6 +575,8 @@ int main(int argc, char *argv[]) {
 			int status;
 			waitpid(childpid, &status, 0);
 		} else { // we are the child
+			strncpy(argv[0],"bosd_child",argv0size);
+			prctl(PR_SET_NAME, "bosd_child", NULL, NULL, NULL);
 			signal(SIGPIPE, catch_signal);
 			snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now - move_back_amount, meter_id);
 			if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
@@ -589,9 +590,6 @@ int main(int argc, char *argv[]) {
 			if (d_flag == 0) {
 				printf("Updated meter %d (fetched data from %d to %d)\n", meter_id, (int) start_time, (int) end_time);
 			}
-			// else {
-			// 	syslog(LOG_INFO, "Updated meter %d (fetched %s data from %d to %d)\n", meter_id, r_flag, (int) start_time, (int) end_time);
-			// }
 			exit(1);
 		}
 		if (o_flag == 1) {

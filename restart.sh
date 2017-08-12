@@ -2,22 +2,25 @@
 
 source db.sh
 pop=2 # keep this number of buildingosd instances running
+sql=""
 while read -r line
 do
 	for pid in $(echo $line | tr " " "\n")
 	do
-		if ps -p $pid > /dev/null; then # process is running
-			(( pop-- ))
-		else # process is not running, but is in db
+		# echo $pid
+		(( pop-- ))
+		if (( pop < 0 )); then
+			kill $pid
 			mysql -u $user -"p$pass" -"h$server" $name -BNse "DELETE FROM daemons WHERE pid = $pid" 2>/dev/null
-		fi
-		if (( pop == 0 )); then # more daemons exist than there should be
-			mysql -u $user -"p$pass" -"h$server" $name -BNse "DELETE FROM daemons WHERE pid < $pid" 2>/dev/null
-			exit 0
+		else # this pid is allowed to exist
+			sql="$sql$pid, "
 		fi
 	done
-done <<< `mysql -u $user -"p$pass" -"h$server" $name -BNse "SELECT pid FROM daemons WHERE target_res = 'live' ORDER BY pid DESC" 2>/dev/null` # order by desc bc those processes were started more recently
-
+done <<< `pidof buildingosd`
+if [ ! -z "$sql" ]; then
+	sql=${sql:0:-2} # cut last two chars ", "
+	mysql -u $user -"p$pass" -"h$server" $name -BNse "DELETE FROM daemons WHERE pid NOT IN ($sql)" 2>/dev/null
+fi
 for ((i=0; i<pop; i++)); do # keep pop number of daemons running
 	`/var/www/html/oberlin/daemons/buildingosd -d`
 done
