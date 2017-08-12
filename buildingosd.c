@@ -114,50 +114,6 @@ static void catch_signal(int signo) {
 }
 
 /**
- * daemonizes a process by disconnecting it from the shell it was started in
- * mostly follows the steps described by `man 7 daemon`
- * See https://stackoverflow.com/questions/17954432/creating-a-daemon-in-linux for code
- */
-static void daemonize() {
-	pid_t pid;
-	/* Fork off the parent process */
-	pid = fork();
-	/* An error occurred */
-	if (pid < 0)
-		exit(EXIT_FAILURE);
-	/* Success: Let the parent terminate */
-	if (pid > 0)
-		exit(EXIT_SUCCESS);
-	/* On success: The child process becomes session leader */
-	if (setsid() < 0)
-		exit(EXIT_FAILURE);
-	/* Catch, ignore and handle signals */
-	//TODO: Implement a working signal handler */
-	signal(SIGCHLD, SIG_IGN);
-	signal(SIGHUP, SIG_IGN);
-
-	/* Fork off for the second time*/
-	pid = fork();
-
-	/* An error occurred */
-	if (pid < 0)
-		exit(EXIT_FAILURE);
-	/* Success: Let the parent terminate */
-	if (pid > 0)
-		exit(EXIT_SUCCESS);
-	/* Set new file permissions */
-	umask(0);
-	/* Change the working directory to the root directory */
-	/* or another appropriated directory */
-	chdir("/");
-	/* Close all open file descriptors */
-	int x;
-	for (x = sysconf(_SC_OPEN_MAX); x>=0; x--) {
-		close(x);
-	}
-}
-
-/**
  * Helper for http_request()
  */
 static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -267,7 +223,7 @@ MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
 	// res = mysql_use_result(conn); // this doesnt work?
 	res = mysql_store_result(conn);
 	row = mysql_fetch_row(res);
-	mysql_free_result(res);
+	// mysql_free_result(res);
 	if (row == NULL) {
 		syslog(LOG_ERR, "QUERY '%s' RETURNED 0 ROWS\n", query);
 		cleanup(conn);
@@ -292,7 +248,7 @@ char *set_api_token(MYSQL *conn, char *org_id) {
 	gettimeofday(&tv, NULL);
 	int time = tv.tv_sec;
 	if (update_token_at > time) { // token still not expired
-		return row[0];
+		return row[0]; // Invalid read of size 8
 	} else { // amortized cost; need to get new API token
 		sprintf(query, "SELECT client_id, client_secret, username, password FROM api WHERE id = '%d'", api_id);
 		row = fetch_row(conn, query);
@@ -307,7 +263,7 @@ char *set_api_token(MYSQL *conn, char *org_id) {
 			error(mysql_error(conn), conn);
 		}
 		free(response.memory);
-		cJSON_free(root);
+		cJSON_Delete(root);
 		return api_token;
 	}
 }
@@ -335,7 +291,11 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	// printf("%d %s\n", (int) start_time, iso8601_start_time);
 	// Make call to the API for meter data
 	char post_data[SMALL_CONTAINER];
-	sprintf(post_data, "resolution=%s&start=%s&end=%s", resolution, str_replace(iso8601_start_time, ":", "%3A"), str_replace(iso8601_end_time, ":", "%3A"));
+	char *encoded_iso8601_start_time = str_replace(iso8601_start_time, ":", "%3A");
+	char *encoded_iso8601_end_time = str_replace(iso8601_end_time, ":", "%3A");
+	sprintf(post_data, "resolution=%s&start=%s&end=%s", resolution, encoded_iso8601_start_time, encoded_iso8601_end_time);
+	free(encoded_iso8601_start_time);
+	free(encoded_iso8601_end_time);
 	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0, api_token);
 	cJSON *root = cJSON_Parse(response.memory);
 	if (!cJSON_HasObjectItem(root, "data")) {
@@ -396,6 +356,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	// }
 	// free(insert_sql);
 	free(response.memory);
+	cJSON_Delete(root);
 	#if UPDATE_CURRENT == 1
 	if (last_non_null != -9999.0 && strcmp(resolution, "live") == 0) {
 		query[0] = '\0';
@@ -454,7 +415,7 @@ int main(int argc, char *argv[]) {
 			printf("Can't use -d and -v at same time; ignoring -v flag\n");
 			v_flag = 0;
 		}
-		daemonize();
+		daemon(1, 0); // http://man7.org/linux/man-pages/man3/daemon.3.html
 	}
 	if (r_flag == NULL) {
 		r_flag = "live";
@@ -519,10 +480,9 @@ int main(int argc, char *argv[]) {
 			}
 			res = mysql_use_result(conn);
 			row = mysql_fetch_row(res);
-			mysql_free_result(res);
 			if (row == NULL) { // record of daemon does not exist
 				error("I should not exist", conn);
-			} else if (row[0][0] == '0') { //(strcmp(row[0], "1") != 0) {
+			} else if (row[0][0] != '1') { //(strcmp(row[0], "1") != 0) {
 				// if enabled column turned off, exit
 				if (d_flag) {
 					error("Enabled column switched off", conn);
@@ -531,18 +491,19 @@ int main(int argc, char *argv[]) {
 					cleanup(conn);
 				}
 			}
-		}
-		if (live_res) { // make sure the priority meters (i.e. the orbs) are always up to date
-			if (mysql_query(conn, PRIORITY_METER)) {
-				error(mysql_error(conn), conn);
-			}
-			res = mysql_store_result(conn);
-			meter = mysql_fetch_row(res);
 			mysql_free_result(res);
 		}
-		if (live_res == 0 || meter == NULL) { // if the orbs are up to date or we're collecting non-minute resolution data
-			meter = fetch_row(conn, target_meter);
-		}
+		// if (live_res) { // make sure the priority meters (i.e. the orbs) are always up to date
+		// 	if (mysql_query(conn, PRIORITY_METER)) {
+		// 		error(mysql_error(conn), conn);
+		// 	}
+		// 	res = mysql_store_result(conn);
+		// 	meter = mysql_fetch_row(res);
+		// 	mysql_free_result(res);
+		// }
+		// if (live_res == 0 || meter == NULL) { // if the orbs are up to date or we're collecting non-minute resolution data
+		meter = fetch_row(conn, target_meter);
+		// }
 		char meter_url[SMALL_CONTAINER];
 		meter_url[0] = '\0';
 		int meter_id = atoi(meter[0]);
@@ -575,12 +536,12 @@ int main(int argc, char *argv[]) {
 			}
 			res = mysql_store_result(conn);
 			row = mysql_fetch_row(res);
-			mysql_free_result(res);
 			if (row == NULL) { // no data exists for this meter
 				start_time = end_time - (time_t) data_lifespan;
 			} else {
 				start_time = (time_t) atoi(row[0]);
 			}
+			mysql_free_result(res);
 		} else {
 			// if other res, only make sure data goes back as far as it's supposed to
 			// i.e. fetch data spanning from data_lifespan to the earliest point recorded in the db
@@ -591,11 +552,12 @@ int main(int argc, char *argv[]) {
 			}
 			res = mysql_store_result(conn);
 			row = mysql_fetch_row(res);
-			mysql_free_result(res);
 			if (row == NULL) { // no data exists for this meter
 				end_time = now;
+				mysql_free_result(res);
 			} else {
 				end_time = (time_t) atoi(row[0]);
+				mysql_free_result(res);
 				if (end_time < ((now - data_lifespan) + secs_in_res)) { // if the end time goes as far back as we store data for, mark meter as updated and continue
 					sprintf(tmp, update_timestamp_col, (int) now, meter_id);
 					if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
