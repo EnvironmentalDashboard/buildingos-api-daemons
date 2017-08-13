@@ -247,9 +247,9 @@ char *set_api_token(MYSQL *conn, char *org_id) {
 	snprintf(query, sizeof(query), "SELECT token, token_updated FROM api WHERE id = %d", api_id);
 	row = fetch_row(conn, query);
 	int update_token_at = atoi(row[1]) + 3595;
-	struct timeval tv;
-	gettimeofday(&tv, NULL);
-	int time = tv.tv_sec;
+	time_t epoch = time(NULL);
+	struct tm *tm = localtime(&epoch);
+	int time = (int) mktime(tm);
 	if (update_token_at > time) { // token still not expired
 		return row[0]; // Invalid read of size 8
 	} else { // amortized cost; need to get new API token
@@ -330,10 +330,11 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 			snprintf(val, sizeof(val), "%.3f", last_non_null);
 		}
 		// https://stackoverflow.com/a/1002631/2624391
-		struct tm ltm = {0};
+		struct tm tm = {0};
 		time_t epoch = 0;
-		if (strptime(data_point_time->valuestring, ISO8601_FORMAT, &ltm) != NULL) {
-			epoch = mktime(&ltm) - 3600; // TODO: fix -- seems to be some problem with daylight savings time, have to subtract an hour to get right time
+		if (strptime(data_point_time->valuestring, ISO8601_FORMAT, &tm) != NULL) {
+			tm.tm_isdst = -1; // Is DST on? 1 = yes, 0 = no, -1 = unknown
+			epoch = mktime(&tm);
 		} else {
 			error("Unable to parse date", conn);
 		}
@@ -575,7 +576,7 @@ int main(int argc, char *argv[]) {
 			int status;
 			waitpid(childpid, &status, 0);
 		} else { // we are the child
-			strncpy(argv[0],"bosd_child",argv0size);
+			strncpy(argv[0], "bosd_child", argv0size);
 			prctl(PR_SET_NAME, "bosd_child", NULL, NULL, NULL);
 			signal(SIGPIPE, catch_signal);
 			snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now - move_back_amount, meter_id);
