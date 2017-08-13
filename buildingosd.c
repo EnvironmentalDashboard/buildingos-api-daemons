@@ -303,18 +303,11 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		error(response.memory, conn);
 	}
 	cJSON *data = cJSON_GetObjectItem(root, "data");
-	// insert new data
-	// char sql_data[SMALL_CONTAINER];
+	// save new data
 	FILE *buffer = fopen(BUFFER_FILE, "a");
 	if (buffer == NULL) {
 	    error("Error opening meter_data buffer", conn);
 	}
-	// int insert_sql_size = SMALL_CONTAINER;
-	// char *insert_sql = malloc(sizeof(char) * SMALL_CONTAINER);
-	// if (insert_sql == NULL) {
-	// 	error("malloc returned NULL", conn);
-	// }
-	// strcpy(insert_sql, "INSERT INTO meter_data (meter_id, value, recorded, resolution) VALUES ");
 	int data_size = cJSON_GetArraySize(data);
 	double last_non_null = -9999.0; // error value
 	for (int i = 0; i < data_size; i++) {
@@ -323,7 +316,6 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		cJSON *data_point_time = cJSON_GetObjectItem(data_point, "localtime");
 		char val[10];
 		if (data_point_val->type == 4) {
-			// val[0] = 'N'; val[1] = 'U'; val[2] = 'L'; val[3] = 'L'; val[4] = '\0'; // srsly?
 			val[0] = '\\'; val[1] = 'N'; val[2] = '\0'; // https://stackoverflow.com/a/2675493
 		} else {
 			last_non_null = data_point_val->valuedouble;
@@ -339,24 +331,11 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 			error("Unable to parse date", conn);
 		}
 		fprintf(buffer, "%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
-		// snprintf(sql_data, sizeof(sql_data), "(%d, %s, %d, '%s')", meter_id, val, (int) epoch, resolution);
-		// strcat(insert_sql, sql_data);
-		// if ((i + 1) == data_size) {
-		// 	strcat(insert_sql, ";");
-		// } else { // more data to process
-		// 	strcat(insert_sql, ", ");
-		// 	insert_sql_size += 70;
-		// 	insert_sql = realloc(insert_sql, insert_sql_size);
-		// }
 		if (verbose) {
 			printf("%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
 		}
 	}
 	fclose(buffer);
-	// if (READONLY_MODE == 0 && mysql_query(conn, insert_sql)) {
-	// 	error(mysql_error(conn), conn);
-	// }
-	// free(insert_sql);
 	free(response.memory);
 	cJSON_Delete(root);
 	#if UPDATE_CURRENT == 1
@@ -483,7 +462,7 @@ int main(int argc, char *argv[]) {
 			row = mysql_fetch_row(res);
 			if (row == NULL) { // record of daemon does not exist
 				error("I should not exist", conn);
-			} else if (row[0][0] != '1') { //(strcmp(row[0], "1") != 0) {
+			} else if (row[0][0] != '1') {
 				// if enabled column turned off, exit
 				if (d_flag) {
 					error("Enabled column switched off", conn);
