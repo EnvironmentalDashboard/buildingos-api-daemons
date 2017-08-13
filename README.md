@@ -2,7 +2,7 @@
 
 
 ## Overview
-The purpose of the [BuildingOS](1) API daemon (`buildingosd`) is to perpetually download meter data from the [BuildingOS API](2) and cache it in a MySQL database for faster access. By default, `buildingosd` will collect "live" (i.e. 1-2 min) resolution data. `buildingosd` will continuously update the least up-to-date meter, requesting live data that spans from the latest reading to the current time. Other resolutions (quarterhour, hour, and month) are calculated by cron jobs using the live data, so there is no need to collect this data from the API. When a new meter is added, however, `buildingosd` can be run to collect non-live resolutions so there is no need to wait for the data to accumulate. When collecting non-live resolution data, the requested data will span from the begining of the time period that the data is stored for to the earliest reading. `buildingosd` has 4 options that help with debugging and allow the resolution collected to be specified.
+The purpose of the [BuildingOS][1] API daemon (`buildingosd`) is to perpetually download meter data from the [BuildingOS API][2] and cache it in a MySQL database for faster access. By default, `buildingosd` will collect "live" (i.e. 1-2 min) resolution data. `buildingosd` will continuously update the least up-to-date meter, requesting live data that spans from the latest reading to the current time. Other resolutions (quarterhour, hour, and month) are calculated by cron jobs using the live data, so there is no need to collect this data from the API. When a new meter is added, however, `buildingosd` can be run to collect non-live resolutions so there is no need to wait for the data to accumulate. When collecting non-live resolution data, the requested data will span from the begining of the time period that the data is stored for to the earliest reading. `buildingosd` has 4 options that help with debugging and allow the resolution collected to be specified.
 
 - `-r` (**r**esolution) flag: If set with one of "live", "quarterhour", "hour", or "month" the program will fetch the specified resolution
 - `-o` (run **o**nce) flag: Only collect data for one meter (always the least up to date meter)
@@ -21,7 +21,7 @@ Before compiling, you will have to define the `db.h` file which contains the def
 #define DB_PASS "1234"
 #define DB_NAME "dbname"
 ```
-If your compiler can not find `mysql.h` (assuming you have it installed), you may have to [compile with](3) the `-I` flag and define a path for `gcc` to check e.g. `-I/usr/include/mysql`. If you do not have have libcurl installed, you will need to run `apt-get install libcurl4-openssl-dev`. After that, just `make all`.
+If your compiler can not find `mysql.h` (assuming you have it installed), you may have to [compile with][3] the `-I` flag and define a path for `gcc` to check e.g. `-I/usr/include/mysql`. If you do not have have libcurl installed, you will need to run `apt-get install libcurl4-openssl-dev`. After that, just `make all`.
 ### Database schema
 `buildingosd` assumes 4 tables exist.
 
@@ -80,7 +80,7 @@ If your compiler can not find `mysql.h` (assuming you have it installed), you ma
       MODIFY `id` int(11) UNSIGNED NOT NULL AUTO_INCREMENT;
     ```
 
-- `orgs` ([Organizations](4) are the top level building hierarchy in BuildingOS. They associate API credentials with buildings and meters)
+- `orgs` ([Organizations][4] are the top level building hierarchy in BuildingOS. They associate API credentials with buildings and meters)
 
     ```sql
     CREATE TABLE `orgs` (
@@ -163,7 +163,7 @@ LEAK SUMMARY:
    still reachable: 80,880 bytes in 3 blocks
         suppressed: 0 bytes in 0 blocks
 ```
-Often, it seems that the program will recieve a `SIGPIPE` when executing a MySQL query. This causes the program to termintate, but before it does, it will launch another instance of itself.
+Also, it sometimes seems that the program will recieve a `SIGPIPE` when executing a MySQL query. This causes the program to termintate, but before it does, it will launch another instance of itself.
 
 
 
