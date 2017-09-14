@@ -350,7 +350,6 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 }
 
 int main(int argc, char *argv[]) {
-	int argv0size = strlen(argv[0]);
 	// data fetched spans from start_time to end_time
 	time_t end_time;
 	time_t start_time;
@@ -547,30 +546,17 @@ int main(int argc, char *argv[]) {
 				}
 			}
 		}
-		pid_t childpid = fork();
-		if (childpid == -1) {
-			error("Failed to fork", conn);
-		} 
-		else if (childpid > 0) {
-			int status;
-			waitpid(childpid, &status, 0);
-		} else { // we are the child
-			strncpy(argv[0], "bosd_child", argv0size);
-			prctl(PR_SET_NAME, "bosd_child", NULL, NULL, NULL);
-			signal(SIGPIPE, catch_signal);
-			snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now - move_back_amount, meter_id);
-			if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
-				error(mysql_error(conn), conn);
-			}
-			update_meter(conn, meter_id, meter_url, set_api_token(conn, org_id), r_flag, start_time, end_time, v_flag);
-			snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now, meter_id);
-			if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
-				error(mysql_error(conn), conn);
-			}
-			if (d_flag == 0) {
-				printf("Updated meter %d (fetched data from %d to %d)\n", meter_id, (int) start_time, (int) end_time);
-			}
-			exit(1);
+		snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now - move_back_amount, meter_id);
+		if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
+			error(mysql_error(conn), conn);
+		}
+		update_meter(conn, meter_id, meter_url, set_api_token(conn, org_id), r_flag, start_time, end_time, v_flag);
+		snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now, meter_id);
+		if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
+			error(mysql_error(conn), conn);
+		}
+		if (d_flag == 0) {
+			printf("Updated meter %d (fetched data from %d to %d)\n", meter_id, (int) start_time, (int) end_time);
 		}
 		if (o_flag == 1) {
 			break;
