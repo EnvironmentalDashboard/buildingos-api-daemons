@@ -326,7 +326,11 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		time_t epoch = 0;
 		if (strptime(data_point_time->valuestring, ISO8601_FORMAT, &tm) != NULL) {
 			tm.tm_isdst = -1; // Is DST on? 1 = yes, 0 = no, -1 = unknown
-			epoch = mktime(&tm);
+			// epoch = mktime(&tm);
+			// See http://kbyanc.blogspot.com/2007/06/c-converting-struct-tm-times-with.html for why mktime() does not work
+			struct tm tmp;
+            tmp = tm;
+            epoch = timegm(&tmp) - (tm.tm_gmtoff);
 		} else {
 			error("Unable to parse date", conn);
 		}
