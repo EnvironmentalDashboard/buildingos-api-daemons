@@ -286,6 +286,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	char iso8601_end_time[30];
 	char iso8601_start_time[30];
 	char query[SMALL_CONTAINER];
+	char tmp_buffer[SMALL_CONTAINER];
 	ts = localtime(&end_time);
 	strftime(iso8601_end_time, sizeof(iso8601_end_time), ISO8601_FORMAT_EST, ts);
 	ts = localtime(&start_time);
@@ -334,7 +335,16 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		} else {
 			error("Unable to parse date", conn);
 		}
-		fprintf(buffer, "%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
+		snprintf(tmp_buffer, sizeof(tmp_buffer), "%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
+		fputs(tmp_buffer, buffer);
+		/*
+		if (fprintf(buffer, "%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution) < 0) { // sometimes doesnt work
+			error("Unable to write data", conn);
+		}
+		if (fflush(buffer) != 0) {
+			error("Unable to flush data", conn);	
+		}
+		*/
 		if (verbose) {
 			printf("%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
 		}
