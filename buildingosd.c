@@ -380,11 +380,13 @@ int main(int argc, char *argv[]) {
 	int d_flag = 0;
 	// -v flag prints debugging information
 	int v_flag = 0;
+	// -t to switch the time span the data is fetched for
+	int t_flag = 0;
 	// if the -r flag is set with one of "live", "quarterhour", "hour", or "month" the program will fetch the specified resolution
 	// when fetching "live" data, the program will always fetch the newest data i.e. data spanning from the last recorded date in our db to now
 	// when fetching other resolutions, the program will be checking that all of that data is there, because normally it is calculated based of min data by crons. if all the data is not there, it will fetch it
 	char *r_flag = NULL;
-	while ((opt = getopt (argc, argv, "r:odv")) != -1) {
+	while ((opt = getopt (argc, argv, "r:odvt")) != -1) {
 		switch (opt) {
 			case 'r': // "resolution"
 				r_flag = optarg;
@@ -397,6 +399,9 @@ int main(int argc, char *argv[]) {
 				break;
 			case 'v': // "verbose"
 				v_flag = 1;
+				break;
+			case 't': // "time"
+				t_flag = 1;
 				break;
 		}
 	}
@@ -520,7 +525,7 @@ int main(int argc, char *argv[]) {
 			}
 		}
 		// Set start/end time
-		if (live_res) {
+		if (live_res || t_flag) {
 			// if live res, fetch data spanning from the latest point recorded in the db to now
 			end_time = now;
 			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
