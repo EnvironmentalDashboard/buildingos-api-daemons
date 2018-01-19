@@ -122,7 +122,7 @@ Some cron jobs need to be run to maintain the system.
 - Keep the daemons alive (`restart.sh` requires you create `db.sh` which contains the variables `server`, `user`, `pass`, and `name` of the mysql credentials)
 
     ```bash
-    * * * * * /var/www/html/oberlin/daemons/restart.sh >/dev/null 2>&1
+    * * * * * /var/www/repos/daemons/restart.sh >/dev/null 2>&1
     ```
 
 - Import data into the database from a CSV every 20 seconds (`INSERT`s are a bottleneck for the CPU, so `buildingosd` will write the data to a CSV file instead of directly `INSERT`ing the data)

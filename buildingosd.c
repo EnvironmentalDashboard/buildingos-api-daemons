@@ -109,7 +109,7 @@ char *str_replace(char *orig, char *rep, char *with) {
  * @param signo [description]
  */
 static void catch_signal(int signo) {
-	int success = system("/var/www/html/oberlin/daemons/buildingosd -d"); // lol
+	int success = system("/var/www/repos/daemons/buildingosd -d"); // lol
 	if (success == -1) {
 		syslog(LOG_ERR, "Unable to relaunch self");
 	}
@@ -286,6 +286,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	char iso8601_start_time[25];
 	char query[SMALL_CONTAINER];
 	char tmp_buffer[SMALL_CONTAINER];
+	// API requires ISO-8601 format with a ':' seperator in the timezone offset
 	ts = localtime(&end_time);
 	strftime(iso8601_end_time, sizeof(iso8601_end_time), ISO8601_FORMAT, ts);
 	iso8601_end_time[22] = ':'; iso8601_end_time[23] = '0'; iso8601_end_time[24] = '0'; iso8601_end_time[25] = '\0';
@@ -529,7 +530,7 @@ int main(int argc, char *argv[]) {
 		if (live_res || t_flag) {
 			// if live res, fetch data spanning from the latest point recorded in the db to now
 			end_time = now;
-			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
+			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
@@ -545,7 +546,7 @@ int main(int argc, char *argv[]) {
 			// if other res, only make sure data goes back as far as it's supposed to
 			// i.e. fetch data spanning from data_lifespan to the earliest point recorded in the db
 			start_time = now - (time_t) data_lifespan;
-			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
+			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
