@@ -10,7 +10,7 @@ do # iterate over result of pidof buildingosd
 		# echo $pid
 		(( pop-- ))
 		if (( pop < 0 )); then # make sure there aren't too many daemons running
-			kill $pid
+			kill $pid 2>/dev/null
 			mysql -u $user -"p$pass" -"h$server" $name -BNse "DELETE FROM daemons WHERE pid = $pid" 2>/dev/null
 		else # this pid is allowed to exist
 			sql="$sql$pid, "
