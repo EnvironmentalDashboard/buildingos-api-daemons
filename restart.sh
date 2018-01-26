@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source /var/www/repos/daemons/db.sh
+source /var/repos/daemons/db.sh
 pop=2 # keep this number of buildingosd instances running
 sql=""
 while read -r line
@@ -23,5 +23,5 @@ if [ ! -z "$sql" ]; then # if not empty string, delete the daemons still in the 
 	# echo "DELETE FROM daemons WHERE pid NOT IN ($sql)"
 fi
 for ((i=0; i<pop; i++)); do # make sure there are enough daemons running
-	`/var/www/repos/daemons/buildingosd -d`
+	`/var/repos/daemons/buildingosd -d`
 done
