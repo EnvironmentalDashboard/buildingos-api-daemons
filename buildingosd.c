@@ -41,7 +41,7 @@
 #include <sys/stat.h>
 #include <curl/curl.h> // install with `apt-get install libcurl4-openssl-dev`
 #include <curl/easy.h>
-#include "./lib/cJSON/cJSON.h"
+#include "lib/cJSON/cJSON.h"
 #include "db.h"
 
 static pid_t buildingosd_pid;
@@ -109,7 +109,7 @@ char *str_replace(char *orig, char *rep, char *with) {
  * @param signo [description]
  */
 static void catch_signal(int signo) {
-	int success = system("/var/www/repos/daemons/buildingosd -d"); // lol
+	int success = system("/src/buildingosd"); // lol
 	if (success == -1) {
 		syslog(LOG_ERR, "Unable to relaunch self");
 	}
@@ -576,7 +576,7 @@ int main(int argc, char *argv[]) {
 		if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 			error(mysql_error(conn), conn);
 		}
-		if (d_flag == 0) {
+		if (v_flag == 1) {
 			printf("Updated meter %d (fetched data from %d to %d)\n", meter_id, (int) start_time, (int) end_time);
 		}
 		if (o_flag == 1) {

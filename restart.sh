@@ -1,6 +1,11 @@
 #!/bin/bash
 
-source /var/repos/daemons/db.sh
+###
+# DEPRECATED
+# this used to run as a cron to restart the daemons but now docker handles that
+###
+
+source /var/secret/db.sh
 pop=2 # keep this number of buildingosd instances running
 sql=""
 while read -r line
@@ -11,7 +16,7 @@ do # iterate over result of pidof buildingosd
 		(( pop-- ))
 		if (( pop < 0 )); then # make sure there aren't too many daemons running
 			kill $pid 2>/dev/null
-			mysql -u $user -"p$pass" -"h$server" $name -BNse "DELETE FROM daemons WHERE pid = $pid" 2>/dev/null
+			mysql -u $USER -"p$PASS" -"h$SERVER" $NAME -BNse "DELETE FROM daemons WHERE pid = $pid" 2>/dev/null
 		else # this pid is allowed to exist
 			sql="$sql$pid, "
 		fi
@@ -19,7 +24,7 @@ do # iterate over result of pidof buildingosd
 done <<< `pidof buildingosd`
 if [ ! -z "$sql" ]; then # if not empty string, delete the daemons still in the db but not running
 	sql=${sql:0:-2} # cut last two chars ", "
-	mysql -u $user -"p$pass" "-h$server" $name -BNse "DELETE FROM daemons WHERE pid NOT IN ($sql)" 2>/dev/null
+	mysql -u $USER -"p$PASS" "-h$SERVER" $NAME -BNse "DELETE FROM daemons WHERE pid NOT IN ($sql)" 2>/dev/null
 	# echo "DELETE FROM daemons WHERE pid NOT IN ($sql)"
 fi
 for ((i=0; i<pop; i++)); do # make sure there are enough daemons running
