@@ -463,7 +463,7 @@ int main(int argc, char *argv[]) {
 	gethostname(hostname, 20);
 	// Insert record of daemon
 	char query[SMALL_CONTAINER];
-	snprintf(query, sizeof(query), "INSERT INTO daemons (pid, enabled, target_res, host) VALUES (%d, %d, '%s', '%s')", buildingosd_pid, 1, r_flag, hostname);
+	snprintf(query, sizeof(query), "REPLACE INTO daemons (pid, enabled, target_res, host) VALUES (%d, %d, '%s', '%s')", buildingosd_pid, 1, r_flag, hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
 		error(mysql_error(conn), conn);
 	}
