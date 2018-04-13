@@ -45,6 +45,7 @@
 #include "db.h"
 
 static pid_t buildingosd_pid;
+static char hostname[20]; // docker hostnames are 12 chars so 20 should be more than enough
 // Stores page downloaded by http_request()
 struct MemoryStruct {
 	char *memory;
@@ -197,7 +198,7 @@ struct MemoryStruct http_request(char *url, char *post, int custom_header, int m
  */
 void cleanup(MYSQL *conn) {
 	char query[SMALL_CONTAINER];
-	snprintf(query, sizeof(query), "DELETE FROM daemons WHERE pid = %d", buildingosd_pid);
+	snprintf(query, sizeof(query), "DELETE FROM daemons WHERE pid = %d AND host = '%s'", buildingosd_pid, hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 		syslog(LOG_ERR, "%s", mysql_error(conn));
 	}
@@ -459,15 +460,16 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	buildingosd_pid = getpid(); // save this in a global so the children know
+	gethostname(hostname, 20);
 	// Insert record of daemon
 	char query[SMALL_CONTAINER];
-	snprintf(query, sizeof(query), "INSERT INTO daemons (pid, enabled, target_res) VALUES (%d, %d, '%s')", buildingosd_pid, 1, r_flag);
+	snprintf(query, sizeof(query), "INSERT INTO daemons (pid, enabled, target_res, host) VALUES (%d, %d, '%s', '%s')", buildingosd_pid, 1, r_flag, hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
 		error(mysql_error(conn), conn);
 	}
 	openlog("buildingosd", LOG_PID, LOG_DAEMON);
 	signal(SIGPIPE, catch_signal);
-	snprintf(query, sizeof(query), "SELECT enabled FROM daemons WHERE pid = %d", buildingosd_pid); // dont modify query variable again
+	snprintf(query, sizeof(query), "SELECT enabled FROM daemons WHERE pid = %d AND host = '%s'", buildingosd_pid, hostname); // dont modify query variable again
 	while (1) {
 		MYSQL_RES *res;
 		MYSQL_ROW row;
@@ -511,7 +513,7 @@ int main(int argc, char *argv[]) {
 		strcat(meter_url, meter[2]);
 		strcat(meter_url, "/data");
 		int last_updated = atoi(meter[3]);
-		snprintf(tmp, sizeof(tmp), "UPDATE daemons SET updating_meter = %d WHERE pid = %d", meter_id, buildingosd_pid);
+		snprintf(tmp, sizeof(tmp), "UPDATE daemons SET updating_meter = %d WHERE pid = %d AND host = '%s'", meter_id, buildingosd_pid, hostname);
 		if (READONLY_MODE == 0) {
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
