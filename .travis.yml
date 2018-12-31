@@ -4,7 +4,7 @@ env:
 services:
   - mysql
 before_script:
-  - ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+  - sudo ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && sudo echo $TZ > /etc/timezone
   - mysql -u root -e 'CREATE DATABASE test;'
   - mysql -u root test < ./tests/integration/db/daemons.sql
   - mysql -u root test < ./tests/integration/db/meters.sql
