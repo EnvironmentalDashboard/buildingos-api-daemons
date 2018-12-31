@@ -1,0 +1,28 @@
+language: c
+env:
+  - TZ=America/New_York
+services:
+  - mysql
+before_script:
+  - ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+  - mysql -u root -e 'CREATE DATABASE test;'
+  - mysql -u root test < ./tests/integration/db/daemons.sql
+  - mysql -u root test < ./tests/integration/db/meters.sql
+  - mysql -u root test < ./tests/integration/db/meter_data.sql
+  - touch /root/meter_data.csv
+  - sed -ie 's|api.buildingos.com/o/token/|environmentaldashboard.org/dummy-bos-token|g' buildingosd.c
+  - printf '#define DB_SERVER "localhost"\n#define DB_USER "root"\n#define DB_PASS ""\n#define DB_NAME "test"\n' > ./db.h
+script:
+  - make all
+  - ./buildingosd -o
+  - ./buildingosd -o
+  - ./buildingosd -o
+  - ./buildingosd -o -rquarterhour
+  - ./buildingosd -o -rhour
+  # - cmp --silent /root/meter_data.csv ./tests/integration/expected_data.csv
+  - ps -eaf
+  - cat /root/meter_data.csv
+notifications:
+  slack:
+    rooms:
+      - envdash:2Ml8eUe6ZTTOGDCcIHtjDaRb#devops
