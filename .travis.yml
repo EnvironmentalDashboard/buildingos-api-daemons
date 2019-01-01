@@ -22,7 +22,7 @@ before_script:
   - mysql -u root -ppass test < ./tests/integration/db/daemons.sql
   - mysql -u root -ppass test < ./tests/integration/db/meters.sql
   - mysql -u root -ppass test < ./tests/integration/db/meter_data.sql
-  - touch /root/meter_data.csv
+  - sudo touch /root/meter_data.csv
   - sed -ie 's|api.buildingos.com/o/token/|environmentaldashboard.org/dummy-bos-token|g' buildingosd.c
   - printf '#define DB_SERVER "localhost"\n#define DB_USER "root"\n#define DB_PASS "pass"\n#define DB_NAME "test"\n' > ./db.h
 script:
