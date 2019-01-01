@@ -23,11 +23,11 @@ CREATE TABLE `meters` (
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 
 INSERT INTO `meters` (`id`, `org_id`, `bos_uuid`, `building_id`, `source`, `scope`, `resource`, `name`, `url`, `building_url`, `current`, `units`, `calculated`, `live_last_updated`, `quarterhour_last_updated`, `hour_last_updated`, `month_last_updated`, `gauges_using`, `timeseries_using`, `for_orb`, `orb_server`) VALUES
-(0, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 1', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
-(1, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 2', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
-(2, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 3', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
-(3, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 4', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
-(4, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 5', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0);
+(1, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 1', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
+(2, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 2', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
+(3, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 3', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
+(4, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 4', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
+(5, 0, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 5', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0);
 
 
 ALTER TABLE `meters`
