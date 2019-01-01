@@ -1,19 +1,30 @@
 language: c
-sudo: required
 env:
   - TZ=America/New_York
 services:
   - mysql
+addons:
+  apt:
+    sources:
+      - mysql-5.7-trusty
+    packages:
+      - mysql-server
+      - mysql-client
+before_install:
+  - sudo mysql -e "use mysql; update user set authentication_string=PASSWORD('pass') where User='root'; update user set plugin='mysql_native_password';FLUSH PRIVILEGES;"
+  - sudo mysql_upgrade -u root -ppass
+  - sudo service mysql restart
 before_script:
-  - sudo ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && sudo echo $TZ > /etc/timezone
+  - echo $TZ | sudo tee /etc/timezone
+  - sudo dpkg-reconfigure --frontend noninteractive tzdata
   - date
-  - mysql -u root -e 'CREATE DATABASE test;'
-  - mysql -u root test < ./tests/integration/db/daemons.sql
-  - mysql -u root test < ./tests/integration/db/meters.sql
-  - mysql -u root test < ./tests/integration/db/meter_data.sql
+  - mysql -u root -ppass -e 'CREATE DATABASE test;'
+  - mysql -u root -ppass test < ./tests/integration/db/daemons.sql
+  - mysql -u root -ppass test < ./tests/integration/db/meters.sql
+  - mysql -u root -ppass test < ./tests/integration/db/meter_data.sql
   - touch /root/meter_data.csv
   - sed -ie 's|api.buildingos.com/o/token/|environmentaldashboard.org/dummy-bos-token|g' buildingosd.c
-  - printf '#define DB_SERVER "localhost"\n#define DB_USER "root"\n#define DB_PASS ""\n#define DB_NAME "test"\n' > ./db.h
+  - printf '#define DB_SERVER "localhost"\n#define DB_USER "root"\n#define DB_PASS "pass"\n#define DB_NAME "test"\n' > ./db.h
 script:
   - make all
   - ./buildingosd -o
