@@ -17,13 +17,15 @@ before_install:
 before_script:
   - echo $TZ | sudo tee /etc/timezone
   - sudo dpkg-reconfigure --frontend noninteractive tzdata
-  - date
   - mysql -u root -ppass -e 'CREATE DATABASE test;'
   - mysql -u root -ppass test < ./tests/integration/db/daemons.sql
   - mysql -u root -ppass test < ./tests/integration/db/meters.sql
   - mysql -u root -ppass test < ./tests/integration/db/meter_data.sql
+  - mysql -u root -ppass test < ./tests/integration/db/api.sql
+  - mysql -u root -ppass test < ./tests/integration/db/orgs.sql
   - sudo touch /root/meter_data.csv
   - sed -ie 's|api.buildingos.com/o/token/|environmentaldashboard.org/dummy-bos-token|g' buildingosd.c
+  - sed -ie "s/AND (id IN (SELECT meter_id FROM saved_chart_meters) OR id IN (SELECT meter_id FROM gauges) OR bos_uuid IN (SELECT elec_uuid FROM orbs) OR bos_uuid IN (SELECT water_uuid FROM orbs) OR bos_uuid IN (SELECT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live')//g" buildingosd.c
   - printf '#define DB_SERVER "localhost"\n#define DB_USER "root"\n#define DB_PASS "pass"\n#define DB_NAME "test"\n' > ./db.h
 script:
   - make all
@@ -33,8 +35,8 @@ script:
   - sudo ./buildingosd -o -rquarterhour
   - sudo ./buildingosd -o -rhour
   # - cmp --silent /root/meter_data.csv ./tests/integration/expected_data.csv
-  - ps -eaf
   - sudo cat /root/meter_data.csv
+  - sudo wc -l /root/meter_data.csv
 notifications:
   slack:
     rooms:
