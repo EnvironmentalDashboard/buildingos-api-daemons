@@ -32,7 +32,7 @@ INSERT INTO `meters` (`id`, `org_id`, `bos_uuid`, `building_id`, `source`, `scop
 
 ALTER TABLE `meters`
   ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `url` (`url`),
+  -- ADD UNIQUE KEY `url` (`url`), -- disable for testing bc we're gonna use the same url for all test meters
   ADD UNIQUE KEY `bos_uuid` (`bos_uuid`);
 
 ALTER TABLE `meters`
