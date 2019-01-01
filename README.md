@@ -1,5 +1,6 @@
 # BuildingOS API data collection daemon
 
+[![Build Status](https://travis-ci.org/EnvironmentalDashboard/buildingos-api-daemons.svg?branch=master)](https://travis-ci.org/EnvironmentalDashboard/buildingos-api-daemons)
 
 ## Overview
 The purpose of the [BuildingOS][1] API daemon (`buildingosd`) is to perpetually download meter data from the [BuildingOS API][2] and cache it in a MySQL database for faster access. By default, `buildingosd` will collect "live" (i.e. 1-2 min) resolution data. `buildingosd` will continuously update the least up-to-date meter, requesting live data that spans from the latest reading to the current time. Other resolutions (quarterhour, hour, and month) are calculated by cron jobs using the live data, so there is no need to collect this data from the API. When a new meter is added, however, `buildingosd` can be run to collect non-live resolutions so there is no need to wait for the data to accumulate. When collecting non-live resolution data, the requested data will span from the begining of the time period that the data is stored for to the earliest reading. `buildingosd` has 4 options that help with debugging and allow the resolution collected to be specified.
