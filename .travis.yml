@@ -34,7 +34,7 @@ script:
   - ./buildingosd -o -rhour
   # - cmp --silent /root/meter_data.csv ./tests/integration/expected_data.csv
   - ps -eaf
-  - cat /root/meter_data.csv
+  - sudo cat /root/meter_data.csv
 notifications:
   slack:
     rooms:

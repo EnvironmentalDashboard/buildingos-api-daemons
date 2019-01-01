@@ -523,7 +523,7 @@ int main(int argc, char *argv[]) {
 			if (live_res) {
 				sleep(sleep_time);
 			} else {
-				return EXIT_SUCCESS;
+				return 0;
 			}
 		}
 		// Set start/end time
@@ -585,5 +585,5 @@ int main(int argc, char *argv[]) {
 	}
 	cleanup(conn);
 	mysql_close(conn);
-	return EXIT_SUCCESS;
+	return 0;
 }
