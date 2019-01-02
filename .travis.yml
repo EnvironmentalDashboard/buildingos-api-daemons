@@ -36,7 +36,7 @@ script:
   - sudo ./buildingosd -o -rquarterhour || true
   - sudo ./buildingosd -o -rhour || true
   - sudo wc -l /root/meter_data.csv
-  - sudo diff /root/meter_data.csv tests/integration/expected_data.csv
+  - sudo cmp /root/meter_data.csv tests/integration/expected_data.csv
   - sudo cat /root/meter_data.csv
 notifications:
   slack:
