@@ -30,11 +30,11 @@ before_script:
   - printf '#define DB_SERVER "localhost"\n#define DB_USER "root"\n#define DB_PASS "pass"\n#define DB_NAME "test"\n' > ./db.h
 script:
   - make all
-  - ./buildingosd -o || true
-  - ./buildingosd -o || true
-  - ./buildingosd -o || true
-  - ./buildingosd -o -rquarterhour || true
-  - ./buildingosd -o -rhour || true
+  - sudo ./buildingosd -o || true # need sudo for these so it can write to /root/meter_data.csv
+  - sudo ./buildingosd -o || true
+  - sudo ./buildingosd -o || true
+  - sudo ./buildingosd -o -rquarterhour || true
+  - sudo ./buildingosd -o -rhour || true
   - sudo wc -l /root/meter_data.csv
   - sudo cmp /root/meter_data.csv tests/integration/expected_data.csv
 notifications:
