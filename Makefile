@@ -8,7 +8,7 @@ MYSQL_CONFIG=`mysql_config --cflags --libs`
 all: buildingosd
 
 buildingosd: buildingosd.o ./lib/cJSON/cJSON.o
-	$(CC) $(CFLAGS) buildingosd.o ./lib/cJSON/cJSON.o $(MYSQL_CONFIG) -o buildingosd $(LFLAGS) -fPIC
+	$(CC) $(CFLAGS) buildingosd.o ./lib/cJSON/cJSON.o $(MYSQL_CONFIG) -o buildingosd $(LFLAGS)
 
 buildingosd.o: buildingosd.c
 	$(CC) $(CFLAGS) -c buildingosd.c $(MYSQL_CONFIG) $(LFLAGS)

@@ -1,4 +1,4 @@
-FROM ubuntu:18.04
+FROM ubuntu:16.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
 # timezone: https://serverfault.com/a/683651/456938
