@@ -32,19 +32,23 @@
 #include <unistd.h>
 #include <time.h>
 #include <mysql.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/prctl.h>
 #include <stdlib.h>
 #include <signal.h>
-#include <syslog.h>
 #include <sys/stat.h>
 #include <curl/curl.h> // install with `apt-get install libcurl4-openssl-dev`
 #include <curl/easy.h>
 #include "lib/cJSON/cJSON.h"
-#include "db.h"
 
 static char hostname[20]; // docker hostnames are 12 chars so 20 should be more than enough
+static char *client_id;
+static char *client_secret;
+static char *username;
+static char *password;
+static char *db_server;
+static char *db_user;
+static char *db_pass;
+static char *db_name;
+
 // Stores page downloaded by http_request()
 struct MemoryStruct {
 	char *memory;
@@ -109,11 +113,7 @@ char *str_replace(char *orig, char *rep, char *with) {
  * @param signo [description]
  */
 static void catch_signal(int signo) {
-	int success = system("/src/buildingosd"); // lol
-	if (success == -1) {
-		syslog(LOG_ERR, "Unable to relaunch self");
-	}
-	syslog(LOG_ERR, "Caught pipe #%d; exiting", signo);
+	fprintf(stderr, "Caught pipe #%d; exiting", signo);
 }
 
 /**
@@ -182,7 +182,7 @@ struct MemoryStruct http_request(char *url, char *post, int custom_header, int m
 		res = curl_easy_perform(curl);
 		/* Check for errors */ 
 		if (res != CURLE_OK) {
-			syslog(LOG_ERR, "curl_easy_perform() failed: %s", curl_easy_strerror(res));
+			fprintf(stderr, "curl_easy_perform() failed: %s", curl_easy_strerror(res));
 			exit(1);
 		}
 		curl_easy_cleanup(curl);
@@ -199,9 +199,8 @@ void cleanup(MYSQL *conn) {
 	char query[SMALL_CONTAINER];
 	snprintf(query, sizeof(query), "DELETE FROM daemons WHERE host = '%s'", hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
-		syslog(LOG_ERR, "%s", mysql_error(conn));
+		fprintf(stderr, "%s", mysql_error(conn));
 	}
-	closelog();
 	mysql_close(conn);
 	exit(1); // this might just kill the child, but since the mysql conn is closed, daemon will die
 }
@@ -210,7 +209,7 @@ void cleanup(MYSQL *conn) {
  * Handle errors
  */
 void error(const char *msg, MYSQL *conn) {
-	syslog(LOG_ERR, "%s", msg);
+	fprintf(stderr, "%s", msg);
 	cleanup(conn);
 }
 
@@ -227,7 +226,7 @@ MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
 	row = mysql_fetch_row(res);
 	// mysql_free_result(res);
 	if (row == NULL) {
-		syslog(LOG_ERR, "QUERY '%s' RETURNED 0 ROWS\n", query);
+		fprintf(stderr, "QUERY '%s' RETURNED 0 ROWS\n", query);
 		cleanup(conn);
 	}
 	return row;
@@ -252,10 +251,8 @@ char *set_api_token(MYSQL *conn, char *org_id) {
 	if (update_token_at > time) { // token still not expired
 		return row[0]; // Invalid read of size 8
 	} else { // amortized cost; need to get new API token
-		snprintf(query, sizeof(query), "SELECT client_id, client_secret, username, password FROM api WHERE id = '%d'", api_id);
-		row = fetch_row(conn, query);
 		char post_data[MED_CONTAINER];
-		snprintf(post_data, sizeof(post_data), "client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password", row[0], row[1], row[2], row[3]);
+		snprintf(post_data, sizeof(post_data), "client_id=%s&client_secret=%s&username=%s&password=%s&grant_type=password", client_id, client_secret, username, password);
 		struct MemoryStruct response = http_request(TOKEN_URL, post_data, 0, 1, "");
 		cJSON *root = cJSON_Parse(response.memory);
 		cJSON *access_token = cJSON_GetObjectItem(root, "access_token");
@@ -407,12 +404,20 @@ int main(int argc, char *argv[]) {
 				break;
 		}
 	}
+	gethostname(hostname, 20);
+	client_id = getenv("CLIENT_ID");
+	client_secret = getenv("CLIENT_SECRET");
+	username = getenv("USERNAME");
+	password = getenv("PASSWORD");
+	db_server = getenv("DB_SERVER");
+	db_user = getenv("DB_USER");
+	db_pass = getenv("DB_PASS");
+	db_name = getenv("DB_NAME");
 	// connect to db
 	MYSQL *conn;
 	conn = mysql_init(NULL);
-	// Connect to database
-	if (!mysql_real_connect(conn, DB_SERVER,
-	DB_USER, DB_PASS, DB_NAME, 0, NULL, 0)) {
+	if (!mysql_real_connect(conn, db_server,
+	db_user, db_pass, db_name, 0, NULL, 0)) {
 		error(mysql_error(conn), conn);
 	}
 	// interpret command line input
@@ -458,14 +463,12 @@ int main(int argc, char *argv[]) {
 		printf("Please provide a proper resolution via the -r flag\n");
 		return 1;
 	}
-	gethostname(hostname, 20); // save this in a global so the children know
 	// Insert record of daemon
 	char query[SMALL_CONTAINER];
 	snprintf(query, sizeof(query), "REPLACE INTO daemons (enabled, target_res, host) VALUES (%d, '%s', '%s')", 1, r_flag, hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
 		error(mysql_error(conn), conn);
 	}
-	openlog("buildingosd", LOG_PID, LOG_DAEMON);
 	signal(SIGPIPE, catch_signal);
 	snprintf(query, sizeof(query), "SELECT enabled FROM daemons WHERE host = '%s'", hostname); // dont modify query variable again
 	while (1) {
