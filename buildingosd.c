@@ -48,6 +48,7 @@ static char *db_server;
 static char *db_user;
 static char *db_pass;
 static char *db_name;
+unsigned int db_port;
 
 // Stores page downloaded by http_request()
 struct MemoryStruct {
@@ -413,11 +414,12 @@ int main(int argc, char *argv[]) {
 	db_user = getenv("DB_USER");
 	db_pass = getenv("DB_PASS");
 	db_name = getenv("DB_NAME");
+	db_port = atoi(getenv("DB_PORT"));
 	// connect to db
 	MYSQL *conn;
 	conn = mysql_init(NULL);
 	if (!mysql_real_connect(conn, db_server,
-	db_user, db_pass, db_name, 0, NULL, 0)) {
+	db_user, db_pass, db_name, db_port, NULL, 0)) {
 		error(mysql_error(conn), conn);
 	}
 	// interpret command line input
