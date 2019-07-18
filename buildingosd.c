@@ -6,24 +6,15 @@
 
 #define _XOPEN_SOURCE // for strptime
 #define _GNU_SOURCE // for strptime
-#define PRIORITY_METER "SELECT id, org_id, url, live_last_updated FROM meters WHERE source = 'buildingos' AND live_last_updated < (UNIX_TIMESTAMP() - 300) AND (bos_uuid IN (SELECT elec_uuid FROM orbs) OR bos_uuid IN (SELECT water_uuid FROM orbs) OR bos_uuid IN (SELECT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY live_last_updated ASC LIMIT 1"
-#define LIVE_TARGET_METER "SELECT id, org_id, url, live_last_updated FROM meters WHERE source = 'buildingos' AND (id IN (SELECT meter_id FROM saved_chart_meters) OR id IN (SELECT meter_id FROM gauges) OR bos_uuid IN (SELECT elec_uuid FROM orbs) OR bos_uuid IN (SELECT water_uuid FROM orbs) OR bos_uuid IN (SELECT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY live_last_updated ASC, id ASC LIMIT 1"
-#define QH_TARGET_METER "SELECT id, org_id, url, quarterhour_last_updated FROM meters WHERE source = 'buildingos' AND (id IN (SELECT meter_id FROM saved_chart_meters) OR id IN (SELECT meter_id FROM gauges) OR bos_uuid IN (SELECT elec_uuid FROM orbs) OR bos_uuid IN (SELECT water_uuid FROM orbs) OR bos_uuid IN (SELECT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY quarterhour_last_updated ASC, id ASC LIMIT 1"
-#define HOUR_TARGET_METER "SELECT id, org_id, url, hour_last_updated FROM meters WHERE source = 'buildingos' AND (id IN (SELECT meter_id FROM saved_chart_meters) OR id IN (SELECT meter_id FROM gauges) OR bos_uuid IN (SELECT elec_uuid FROM orbs) OR bos_uuid IN (SELECT water_uuid FROM orbs) OR bos_uuid IN (SELECT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY hour_last_updated ASC, id ASC LIMIT 1"
-#define MONTH_TARGET_METER "SELECT id, org_id, url, month_last_updated FROM meters WHERE source = 'buildingos' AND (id IN (SELECT meter_id FROM saved_chart_meters) OR id IN (SELECT meter_id FROM gauges) OR bos_uuid IN (SELECT elec_uuid FROM orbs) OR bos_uuid IN (SELECT water_uuid FROM orbs) OR bos_uuid IN (SELECT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY month_last_updated ASC, id ASC LIMIT 1"
-#define UPDATE_LIVE_TIMESTAMP "UPDATE meters SET live_last_updated = %d WHERE id = %d"
-#define UPDATE_QH_TIMESTAMP "UPDATE meters SET quarterhour_last_updated = %d WHERE id = %d"
-#define UPDATE_HOUR_TIMESTAMP "UPDATE meters SET hour_last_updated = %d WHERE id = %d"
-#define UPDATE_MONTH_TIMESTAMP "UPDATE meters SET month_last_updated = %d WHERE id = %d"
+#define TARGET_METER "SELECT id, url, last_updated FROM meter WHERE source = 'buildingos' AND (gauges_using > 0 OR charts_using > 0) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY last_updated ASC, id ASC LIMIT 1"
+#define UPDATE_TIMESTAMP "UPDATE meter SET last_updated = %d WHERE id = %d"
 #define TOKEN_URL "https://api.buildingos.com/o/token/" // where to get the token from
 #define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S%z"
 #define BUFFER_FILE "/root/meter_data.csv"
 #define SMALL_CONTAINER 255 // small fixed-size container for arrays
 #define MED_CONTAINER 510 // just double SMALL_CONTAINER
-#define LIVE_DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
-#define QH_DATA_LIFESPAN 1209600 // 2 weeks
-#define HOUR_DATA_LIFESPAN 5184000 // 2 months
-#define MONTH_DATA_LIFESPAN 63113904 // 2 years
+#define DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
+#define MOVE_BACK_AMOUNT 180 // meant to move meters back in the queue of what's being updated by update_meter() so they don't hold up everything if update_meter() keeps failing for some reason. note that if update_meter() does finish, it pushes the meter to the end of the queue by updating the last_updated_col to the current time otherwise the last_updated_col remains the current time minus this amount.
 #define UPDATE_CURRENT 1 // update the meters.current column with the current reading?
 #define READONLY_MODE 0 // if on (i.e. 1) the daemon will not make queries that update/insert/delete data by short circuiting if stmts
 
@@ -203,7 +194,7 @@ void cleanup(MYSQL *conn) {
 		fprintf(stderr, "%s", mysql_error(conn));
 	}
 	mysql_close(conn);
-	exit(1); // this might just kill the child, but since the mysql conn is closed, daemon will die
+	exit(1);
 }
 
 /**
@@ -236,14 +227,11 @@ MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
 /**
  * Sets the API token, fetching a new one if necessary
  * @param conn
- * @param org_id to get API credentials for
  */
-char *set_api_token(MYSQL *conn, char *org_id) {
+char *set_api_token(MYSQL *conn) {
 	char query[SMALL_CONTAINER];
 	MYSQL_ROW row;
-	snprintf(query, sizeof(query), "SELECT api_id FROM orgs WHERE id = %s", org_id);
-	int api_id = atoi(fetch_row(conn, query)[0]);
-	snprintf(query, sizeof(query), "SELECT token, token_updated FROM api WHERE id = %d", api_id);
+	snprintf(query, sizeof(query), "SELECT token, token_updated FROM buildingos_api WHERE client_id = '%s'", client_id);
 	row = fetch_row(conn, query);
 	int update_token_at = atoi(row[1]) + 3595;
 	time_t epoch = time(NULL);
@@ -258,7 +246,7 @@ char *set_api_token(MYSQL *conn, char *org_id) {
 		cJSON *root = cJSON_Parse(response.memory);
 		cJSON *access_token = cJSON_GetObjectItem(root, "access_token");
 		char *api_token = access_token->valuestring;
-		snprintf(query, sizeof(query), "UPDATE api SET token = '%s', token_updated = %d WHERE id = %d", api_token, time, api_id);
+		snprintf(query, sizeof(query), "UPDATE buildingos_api SET token = '%s', token_updated = %d WHERE client_id = %d", api_token, time, client_id);
 		if (mysql_query(conn, query)) { // do this even if READONLY_MODE is on bc it cant hurt to update the api token
 			error(mysql_error(conn), conn);
 		}
@@ -274,11 +262,10 @@ char *set_api_token(MYSQL *conn, char *org_id) {
  * @param conn
  * @param meter_id
  * @param meter_url
- * @param resolution
  * @param start_time    the earlier date
  * @param end_time      the later date
  */
-void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, char *resolution, time_t start_time, time_t end_time, int verbose) {
+void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, time_t start_time, time_t end_time, int verbose) {
 	struct tm *ts;
 	char iso8601_end_time[25];
 	char iso8601_start_time[25];
@@ -295,7 +282,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 	char post_data[SMALL_CONTAINER];
 	char *encoded_iso8601_start_time = str_replace(iso8601_start_time, ":", "%3A");
 	char *encoded_iso8601_end_time = str_replace(iso8601_end_time, ":", "%3A");
-	snprintf(post_data, sizeof(post_data), "resolution=%s&start=%s&end=%s", resolution, encoded_iso8601_start_time, encoded_iso8601_end_time);
+	snprintf(post_data, sizeof(post_data), "resolution=live&start=%s&end=%s", encoded_iso8601_start_time, encoded_iso8601_end_time);
 	free(encoded_iso8601_start_time);
 	free(encoded_iso8601_end_time);
 	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0, api_token);
@@ -335,10 +322,10 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		} else {
 			error("Unable to parse date", conn);
 		}
-		snprintf(tmp_buffer, sizeof(tmp_buffer), "%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
+		snprintf(tmp_buffer, sizeof(tmp_buffer), "%d,%s,%d,\"live\"\n", meter_id, val, (int) epoch);
 		fputs(tmp_buffer, buffer);
 		/*
-		if (fprintf(buffer, "%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution) < 0) { // sometimes doesnt work
+		if (fprintf(buffer, "%d,%s,%d,\"live\"\n", meter_id, val, (int) epoch) < 0) { // sometimes doesn't work
 			error("Unable to write data", conn);
 		}
 		if (fflush(buffer) != 0) {
@@ -346,14 +333,14 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, c
 		}
 		*/
 		if (verbose) {
-			printf("%d,%s,%d,\"%s\"\n", meter_id, val, (int) epoch, resolution);
+			printf("%d,%s,%d,\"live\"\n", meter_id, val, (int) epoch);
 		}
 	}
 	fclose(buffer);
 	free(response.memory);
 	cJSON_Delete(root);
 	#if UPDATE_CURRENT == 1
-	if (last_non_null != -9999.0 && strcmp(resolution, "live") == 0) {
+	if (last_non_null != -9999.0) {
 		query[0] = '\0';
 		snprintf(query, sizeof(query), "UPDATE meters SET current = %.3f WHERE id = %d", last_non_null, meter_id);
 		if (READONLY_MODE == 0 && mysql_query(conn, query)) {
@@ -368,34 +355,17 @@ int main(int argc, char *argv[]) {
 	time_t end_time;
 	time_t start_time;
 	int opt;
-	int data_lifespan;
-	int move_back_amount;
-	int secs_in_res;
-	char *target_meter;
-	char *update_timestamp_col;
 	char tmp[SMALL_CONTAINER];
 	// If the -o flag is set, the program will update a single meter instead of looping
 	int o_flag = 0;
-	// if the -d flag is set, the program will become a true daemon, disconnecting itself from the shell it was started in
-	int d_flag = 0;
 	// -v flag prints debugging information
 	int v_flag = 0;
 	// -t to switch the time span the data is fetched for
 	int t_flag = 0;
-	// if the -r flag is set with one of "live", "quarterhour", "hour", or "month" the program will fetch the specified resolution
-	// when fetching "live" data, the program will always fetch the newest data i.e. data spanning from the last recorded date in our db to now
-	// when fetching other resolutions, the program will be checking that all of that data is there, because normally it is calculated based of min data by crons. if all the data is not there, it will fetch it
-	char *r_flag = NULL;
-	while ((opt = getopt (argc, argv, "r:odvt")) != -1) {
+	while ((opt = getopt (argc, argv, "ovt")) != -1) {
 		switch (opt) {
-			case 'r': // "resolution"
-				r_flag = optarg;
-				break;
 			case 'o': // run "once"
 				o_flag = 1;
-				break;
-			case 'd': // "daemon"
-				d_flag = 1;
 				break;
 			case 'v': // "verbose"
 				v_flag = 1;
@@ -422,57 +392,14 @@ int main(int argc, char *argv[]) {
 	db_user, db_pass, db_name, db_port, NULL, 0)) {
 		error(mysql_error(conn), conn);
 	}
-	// interpret command line input
-	if (d_flag) {
-		if (v_flag) {
-			printf("Can't use -d and -v at same time; ignoring -v flag\n");
-			v_flag = 0;
-		}
-		if (daemon(1, 0) == -1) { // http://man7.org/linux/man-pages/man3/daemon.3.html
-			error("Failed to daemonize", conn);
-		}
-	}
-	if (r_flag == NULL) {
-		r_flag = "live";
-	}
-	int live_res = 0;
-	if (strcmp(r_flag, "live") == 0) {
-		target_meter = LIVE_TARGET_METER;
-		update_timestamp_col = UPDATE_LIVE_TIMESTAMP;
-		data_lifespan = LIVE_DATA_LIFESPAN;
-		move_back_amount = 180; // meant to move meters back in the queue of what's being updated by update_meter() so they don't hold up everything if update_meter() keeps failing for some reason. note that if update_meter() does finish, it pushes the meter to the end of the queue by updating the last_updated_col to the current time otherwise the last_updated_col remains the current time minus this amount.
-		secs_in_res = 60;
-		live_res = 1;
-	} else if (strcmp(r_flag, "quarterhour") == 0) {
-		target_meter = QH_TARGET_METER;
-		update_timestamp_col = UPDATE_QH_TIMESTAMP;
-		data_lifespan = QH_DATA_LIFESPAN;
-		move_back_amount = 480;
-		secs_in_res = 900;
-	} else if (strcmp(r_flag, "hour") == 0) {
-		target_meter = HOUR_TARGET_METER;
-		update_timestamp_col = UPDATE_HOUR_TIMESTAMP;
-		data_lifespan = HOUR_DATA_LIFESPAN;
-		move_back_amount = 900;
-		secs_in_res = 3600;
-	} else if (strcmp(r_flag, "month") == 0) {
-		target_meter = MONTH_TARGET_METER;
-		update_timestamp_col = UPDATE_MONTH_TIMESTAMP;
-		data_lifespan = MONTH_DATA_LIFESPAN;
-		move_back_amount = 86400;
-		secs_in_res = 2592000;
-	} else {
-		printf("Please provide a proper resolution via the -r flag\n");
-		return 1;
-	}
-	// Insert record of daemon
+	// insert record of daemon
 	char query[SMALL_CONTAINER];
-	snprintf(query, sizeof(query), "REPLACE INTO daemons (enabled, target_res, host) VALUES (%d, '%s', '%s')", 1, r_flag, hostname);
+	snprintf(query, sizeof(query), "REPLACE INTO daemons (enabled, host) VALUES (%d, '%s')", 1, hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
 		error(mysql_error(conn), conn);
 	}
 	signal(SIGPIPE, catch_signal);
-	snprintf(query, sizeof(query), "SELECT enabled FROM daemons WHERE host = '%s'", hostname); // dont modify query variable again
+	snprintf(query, sizeof(query), "SELECT enabled FROM daemons WHERE host = '%s'", hostname); // dont modify query variable again!
 	while (1) {
 		MYSQL_RES *res;
 		MYSQL_ROW row;
@@ -486,72 +413,36 @@ int main(int argc, char *argv[]) {
 			res = mysql_use_result(conn);
 			row = mysql_fetch_row(res);
 			if (row == NULL) { // record of daemon does not exist
-				error("I should not exist", conn);
+				error("Program record not found; exiting", conn);
 			} else if (row[0][0] != '1') {
 				// if enabled column turned off, exit
-				if (d_flag) {
-					error("Enabled column switched off", conn);
-				} else {
-					puts("Enabled column switched off");
-					cleanup(conn);
-				}
+				puts("Enabled column switched off");
+				cleanup(conn);
 			}
 			mysql_free_result(res);
 		}
-		// if (live_res) { // make sure the priority meters (i.e. the orbs) are always up to date
-		// 	if (mysql_query(conn, PRIORITY_METER)) {
-		// 		error(mysql_error(conn), conn);
-		// 	}
-		// 	res = mysql_store_result(conn);
-		// 	meter = mysql_fetch_row(res);
-		// 	mysql_free_result(res);
-		// }
-		// if (live_res == 0 || meter == NULL) { // if the orbs are up to date or we're collecting non-minute resolution data
-		meter = fetch_row(conn, target_meter);
-		// }
+		meter = fetch_row(conn, TARGET_METER);
 		char meter_url[SMALL_CONTAINER];
 		meter_url[0] = '\0';
 		int meter_id = atoi(meter[0]);
-		char *org_id = meter[1];
-		strcat(meter_url, meter[2]);
+		strcat(meter_url, meter[1]);
 		strcat(meter_url, "/data");
-		int last_updated = atoi(meter[3]);
+		int last_updated = atoi(meter[2]);
 		snprintf(tmp, sizeof(tmp), "UPDATE daemons SET updating_meter = %d WHERE host = '%s'", meter_id, hostname);
 		if (READONLY_MODE == 0) {
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
 		}
-		if (last_updated > (now - secs_in_res)) { // if the least up to date meter was last updated secs_in_res seconds ago
-			int sleep_time = (int) (secs_in_res / 10);
-			now += sleep_time;
-			if (live_res) {
-				sleep(sleep_time);
-			} else {
-				return EXIT_SUCCESS;
-			}
+		if (last_updated > (now - 60)) { // if the least up to date meter was last updated 60 seconds ago
+			sleep(now - last_updated);
 		}
 		// Set start/end time
-		if (live_res || t_flag) {
-			// if live res, fetch data spanning from the latest point recorded in the db to now
-			end_time = now;
-			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
-			if (mysql_query(conn, tmp)) {
-				error(mysql_error(conn), conn);
-			}
-			res = mysql_store_result(conn);
-			row = mysql_fetch_row(res);
-			if (row == NULL) { // no data exists for this meter
-				start_time = end_time - (time_t) data_lifespan;
-			} else {
-				start_time = (time_t) atoi(row[0]);
-			}
-			mysql_free_result(res);
-		} else {
-			// if other res, only make sure data goes back as far as it's supposed to
+		if (t_flag) {
+			// only make sure data goes back as far as it's supposed to
 			// i.e. fetch data spanning from data_lifespan to the earliest point recorded in the db
 			start_time = now - (time_t) data_lifespan;
-			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM meter_data WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
+			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM reading WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
@@ -563,21 +454,36 @@ int main(int argc, char *argv[]) {
 			} else {
 				end_time = (time_t) atoi(row[0]);
 				mysql_free_result(res);
-				if (end_time < ((now - data_lifespan) + secs_in_res)) { // if the end time goes as far back as we store data for, mark meter as updated and continue
-					snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now, meter_id);
+				if (end_time < ((now - data_lifespan) + 60)) { // if the end time goes as far back as we store data for, mark meter as updated and continue
+					snprintf(tmp, sizeof(tmp), UPDATE_TIMESTAMP, (int) now, meter_id);
 					if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 						error(mysql_error(conn), conn);
 					}
 					continue;
 				}
 			}
+		} else {
+			// fetch data spanning from the latest point recorded in the db to now
+			end_time = now;
+			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM reading WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
+			if (mysql_query(conn, tmp)) {
+				error(mysql_error(conn), conn);
+			}
+			res = mysql_store_result(conn);
+			row = mysql_fetch_row(res);
+			if (row == NULL) { // no data exists for this meter
+				start_time = end_time - (time_t) data_lifespan;
+			} else {
+				start_time = (time_t) atoi(row[0]);
+			}
+			mysql_free_result(res);
 		}
-		snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now - move_back_amount, meter_id);
+		snprintf(tmp, sizeof(tmp), UPDATE_TIMESTAMP, (int) now - MOVE_BACK_AMOUNT, meter_id);
 		if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 			error(mysql_error(conn), conn);
 		}
-		update_meter(conn, meter_id, meter_url, set_api_token(conn, org_id), r_flag, start_time, end_time, v_flag);
-		snprintf(tmp, sizeof(tmp), update_timestamp_col, (int) now, meter_id);
+		update_meter(conn, meter_id, meter_url, set_api_token(conn, client_id), start_time, end_time, v_flag);
+		snprintf(tmp, sizeof(tmp), UPDATE_TIMESTAMP, (int) now, meter_id);
 		if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 			error(mysql_error(conn), conn);
 		}
