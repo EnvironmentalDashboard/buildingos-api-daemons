@@ -231,7 +231,8 @@ MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
 char *set_api_token(MYSQL *conn) {
 	char query[SMALL_CONTAINER];
 	MYSQL_ROW row;
-	snprintf(query, sizeof(query), "SELECT token, token_updated FROM buildingos_api WHERE client_id = '%s'", client_id);
+	// use from_unixtime, UNIX_TIMESTAMP
+	snprintf(query, sizeof(query), "SELECT token, UNIX_TIMESTAMP(token_updated) FROM buildingos_api WHERE client_id = '%s'", client_id);
 	row = fetch_row(conn, query);
 	int update_token_at = atoi(row[1]) + 3595;
 	time_t epoch = time(NULL);
@@ -246,7 +247,7 @@ char *set_api_token(MYSQL *conn) {
 		cJSON *root = cJSON_Parse(response.memory);
 		cJSON *access_token = cJSON_GetObjectItem(root, "access_token");
 		char *api_token = access_token->valuestring;
-		snprintf(query, sizeof(query), "UPDATE buildingos_api SET token = '%s', token_updated = %d WHERE client_id = %d", api_token, time, client_id);
+		snprintf(query, sizeof(query), "UPDATE buildingos_api SET token = '%s', token_updated = FROM_UNIXTIME(%d) WHERE client_id = '%s'", api_token, time, client_id);
 		if (mysql_query(conn, query)) { // do this even if READONLY_MODE is on bc it cant hurt to update the api token
 			error(mysql_error(conn), conn);
 		}
@@ -282,7 +283,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, t
 	char post_data[SMALL_CONTAINER];
 	char *encoded_iso8601_start_time = str_replace(iso8601_start_time, ":", "%3A");
 	char *encoded_iso8601_end_time = str_replace(iso8601_end_time, ":", "%3A");
-	snprintf(post_data, sizeof(post_data), "resolution=live&start=%s&end=%s", encoded_iso8601_start_time, encoded_iso8601_end_time);
+	snprintf(post_data, sizeof(post_data), "resolution=1&start=%s&end=%s", encoded_iso8601_start_time, encoded_iso8601_end_time);
 	free(encoded_iso8601_start_time);
 	free(encoded_iso8601_end_time);
 	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0, api_token);
@@ -322,10 +323,10 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, t
 		} else {
 			error("Unable to parse date", conn);
 		}
-		snprintf(tmp_buffer, sizeof(tmp_buffer), "%d,%s,%d,\"live\"\n", meter_id, val, (int) epoch);
+		snprintf(tmp_buffer, sizeof(tmp_buffer), "%d,%s,%d,\"1\"\n", meter_id, val, (int) epoch);
 		fputs(tmp_buffer, buffer);
 		/*
-		if (fprintf(buffer, "%d,%s,%d,\"live\"\n", meter_id, val, (int) epoch) < 0) { // sometimes doesn't work
+		if (fprintf(buffer, "%d,%s,%d,\"1\"\n", meter_id, val, (int) epoch) < 0) { // sometimes doesn't work
 			error("Unable to write data", conn);
 		}
 		if (fflush(buffer) != 0) {
@@ -333,7 +334,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, t
 		}
 		*/
 		if (verbose) {
-			printf("%d,%s,%d,\"live\"\n", meter_id, val, (int) epoch);
+			printf("%d,%s,%d,\"1\"\n", meter_id, val, (int) epoch);
 		}
 	}
 	fclose(buffer);
@@ -440,9 +441,9 @@ int main(int argc, char *argv[]) {
 		// Set start/end time
 		if (t_flag) {
 			// only make sure data goes back as far as it's supposed to
-			// i.e. fetch data spanning from data_lifespan to the earliest point recorded in the db
-			start_time = now - (time_t) data_lifespan;
-			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM reading WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded ASC LIMIT 1", meter_id, r_flag);
+			// i.e. fetch data spanning from DATA_LIFESPAN to the earliest point recorded in the db
+			start_time = now - (time_t) DATA_LIFESPAN;
+			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM reading WHERE meter_id = %d AND value IS NOT NULL ORDER BY recorded ASC LIMIT 1", meter_id);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
@@ -454,7 +455,7 @@ int main(int argc, char *argv[]) {
 			} else {
 				end_time = (time_t) atoi(row[0]);
 				mysql_free_result(res);
-				if (end_time < ((now - data_lifespan) + 60)) { // if the end time goes as far back as we store data for, mark meter as updated and continue
+				if (end_time < ((now - DATA_LIFESPAN) + 60)) { // if the end time goes as far back as we store data for, mark meter as updated and continue
 					snprintf(tmp, sizeof(tmp), UPDATE_TIMESTAMP, (int) now, meter_id);
 					if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 						error(mysql_error(conn), conn);
@@ -465,14 +466,14 @@ int main(int argc, char *argv[]) {
 		} else {
 			// fetch data spanning from the latest point recorded in the db to now
 			end_time = now;
-			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM reading WHERE meter_id = %d AND resolution = '%s' AND value IS NOT NULL ORDER BY recorded DESC LIMIT 1", meter_id, r_flag);
+			snprintf(tmp, sizeof(tmp), "SELECT recorded FROM reading WHERE meter_id = %d AND value IS NOT NULL ORDER BY recorded DESC LIMIT 1", meter_id);
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);
 			}
 			res = mysql_store_result(conn);
 			row = mysql_fetch_row(res);
 			if (row == NULL) { // no data exists for this meter
-				start_time = end_time - (time_t) data_lifespan;
+				start_time = end_time - (time_t) DATA_LIFESPAN;
 			} else {
 				start_time = (time_t) atoi(row[0]);
 			}
@@ -482,7 +483,7 @@ int main(int argc, char *argv[]) {
 		if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 			error(mysql_error(conn), conn);
 		}
-		update_meter(conn, meter_id, meter_url, set_api_token(conn, client_id), start_time, end_time, v_flag);
+		update_meter(conn, meter_id, meter_url, set_api_token(conn), start_time, end_time, v_flag);
 		snprintf(tmp, sizeof(tmp), UPDATE_TIMESTAMP, (int) now, meter_id);
 		if (READONLY_MODE == 0 && mysql_query(conn, tmp)) {
 			error(mysql_error(conn), conn);
