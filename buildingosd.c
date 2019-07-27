@@ -6,7 +6,7 @@
 
 #define _XOPEN_SOURCE // for strptime
 #define _GNU_SOURCE // for strptime
-#define TARGET_METER "SELECT id, url, last_updated FROM meter WHERE source = 'buildingos' AND (gauges_using > 0 OR charts_using > 0) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live') ORDER BY last_updated ASC, id ASC LIMIT 1"
+#define TARGET_METER "SELECT id, url, last_updated FROM meter WHERE source = 'buildingos' AND (gauges_using > 0 OR charts_using > 0) AND id NOT IN (SELECT updating_meter FROM daemons) ORDER BY last_updated ASC, id ASC LIMIT 1"
 #define UPDATE_TIMESTAMP "UPDATE meter SET last_updated = %d WHERE id = %d"
 #define TOKEN_URL "https://api.buildingos.com/o/token/" // where to get the token from
 #define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S%z"
@@ -14,8 +14,8 @@
 #define SMALL_CONTAINER 255 // small fixed-size container for arrays
 #define MED_CONTAINER 510 // just double SMALL_CONTAINER
 #define DATA_LIFESPAN 7200 // live data is stored for 2 hours i.e. 7200s
-#define MOVE_BACK_AMOUNT 180 // meant to move meters back in the queue of what's being updated by update_meter() so they don't hold up everything if update_meter() keeps failing for some reason. note that if update_meter() does finish, it pushes the meter to the end of the queue by updating the last_updated_col to the current time otherwise the last_updated_col remains the current time minus this amount.
-#define UPDATE_CURRENT 1 // update the meters.current column with the current reading?
+#define MOVE_BACK_AMOUNT 180 // meant to move meter back in the queue of what's being updated by update_meter() so they don't hold up everything if update_meter() keeps failing for some reason. note that if update_meter() does finish, it pushes the meter to the end of the queue by updating the last_updated_col to the current time otherwise the last_updated_col remains the current time minus this amount.
+#define UPDATE_CURRENT 1 // update the meter.current column with the current reading?
 #define READONLY_MODE 0 // if on (i.e. 1) the daemon will not make queries that update/insert/delete data by short circuiting if stmts
 
 #include <stdio.h>
@@ -283,7 +283,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, t
 	char post_data[SMALL_CONTAINER];
 	char *encoded_iso8601_start_time = str_replace(iso8601_start_time, ":", "%3A");
 	char *encoded_iso8601_end_time = str_replace(iso8601_end_time, ":", "%3A");
-	snprintf(post_data, sizeof(post_data), "resolution=1&start=%s&end=%s", encoded_iso8601_start_time, encoded_iso8601_end_time);
+	snprintf(post_data, sizeof(post_data), "resolution=live&start=%s&end=%s", encoded_iso8601_start_time, encoded_iso8601_end_time);
 	free(encoded_iso8601_start_time);
 	free(encoded_iso8601_end_time);
 	struct MemoryStruct response = http_request(meter_url, post_data, 1, 0, api_token);
@@ -323,7 +323,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, t
 		} else {
 			error("Unable to parse date", conn);
 		}
-		snprintf(tmp_buffer, sizeof(tmp_buffer), "%d,%s,%d,\"1\"\n", meter_id, val, (int) epoch);
+		snprintf(tmp_buffer, sizeof(tmp_buffer), "%d,%s,%d,1\n", meter_id, val, (int) epoch);
 		fputs(tmp_buffer, buffer);
 		/*
 		if (fprintf(buffer, "%d,%s,%d,\"1\"\n", meter_id, val, (int) epoch) < 0) { // sometimes doesn't work
@@ -334,7 +334,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, t
 		}
 		*/
 		if (verbose) {
-			printf("%d,%s,%d,\"1\"\n", meter_id, val, (int) epoch);
+			printf("%d,%s,%d,1\n", meter_id, val, (int) epoch);
 		}
 	}
 	fclose(buffer);
@@ -343,7 +343,7 @@ void update_meter(MYSQL *conn, int meter_id, char *meter_url, char *api_token, t
 	#if UPDATE_CURRENT == 1
 	if (last_non_null != -9999.0) {
 		query[0] = '\0';
-		snprintf(query, sizeof(query), "UPDATE meters SET current = %.3f WHERE id = %d", last_non_null, meter_id);
+		snprintf(query, sizeof(query), "UPDATE meter SET current = %.3f WHERE id = %d", last_non_null, meter_id);
 		if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 			error(mysql_error(conn), conn);
 		}

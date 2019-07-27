@@ -1,21 +1,13 @@
-CREATE TABLE `api` (
+CREATE TABLE `buildingos_api` (
   `id` int(11) NOT NULL,
-  `user_id` int(11) NOT NULL DEFAULT '0',
-  `client_id` varchar(255) NOT NULL,
-  `client_secret` varchar(255) NOT NULL,
-  `username` varchar(255) NOT NULL,
-  `password` varchar(255) NOT NULL,
-  `token` varchar(255) NOT NULL DEFAULT '',
-  `token_updated` int(11) NOT NULL DEFAULT '0'
-) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+  `community_id` int(11) NOT NULL,
+  `client_id` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `client_secret` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `username` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `password` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `token` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `token_updated` datetime NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-
-INSERT INTO `api` (`id`, `user_id`, `client_id`, `client_secret`, `username`, `password`, `token`, `token_updated`) VALUES
-(1, 1, 'OMITTED', 'OMITTED', 'OMITTED', 'OMITTED', 'OMITTED', 0);
-
-
-ALTER TABLE `api`
-  ADD PRIMARY KEY (`id`);
-
-ALTER TABLE `api`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+INSERT INTO `buildingos_api` (`id`, `community_id`, `client_id`, `client_secret`, `username`, `password`, `token`, `token_updated`) VALUES
+(1, 1, 'client_id', 'OMITTED', 'OMITTED', 'OMITTED', 'OMITTED', '2000-01-01 00:00:00');
