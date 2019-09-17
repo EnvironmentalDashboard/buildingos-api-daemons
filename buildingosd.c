@@ -6,7 +6,7 @@
 
 #define _XOPEN_SOURCE // for strptime
 #define _GNU_SOURCE // for strptime
-#define TARGET_METER "SELECT id, url, last_updated FROM meter WHERE source = 'buildingos' AND (gauges_using > 0 OR charts_using > 0) AND id NOT IN (SELECT updating_meter FROM daemons) ORDER BY last_updated ASC, id ASC LIMIT 1"
+#define TARGET_METER "SELECT id, url, last_updated FROM meter WHERE source = 'buildingos' AND (is_on = 1 OR id IN (SELECT meter_id FROM chart_meter) OR id IN (SELECT meter_id FROM gauge)) AND id NOT IN (SELECT updating_id FROM daemon WHERE updating_id IS NOT NULL) ORDER BY last_updated ASC, id ASC LIMIT 1"
 #define UPDATE_TIMESTAMP "UPDATE meter SET last_updated = %d WHERE id = %d"
 #define TOKEN_URL "https://api.buildingos.com/o/token/" // where to get the token from
 #define ISO8601_FORMAT "%Y-%m-%dT%H:%M:%S%z"
@@ -189,7 +189,7 @@ struct MemoryStruct http_request(char *url, char *post, int custom_header, int m
  */
 void cleanup(MYSQL *conn) {
 	char query[SMALL_CONTAINER];
-	snprintf(query, sizeof(query), "DELETE FROM daemons WHERE host = '%s'", hostname);
+	snprintf(query, sizeof(query), "DELETE FROM daemon WHERE host = '%s'", hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 		fprintf(stderr, "%s", mysql_error(conn));
 	}
@@ -395,12 +395,12 @@ int main(int argc, char *argv[]) {
 	}
 	// insert record of daemon
 	char query[SMALL_CONTAINER];
-	snprintf(query, sizeof(query), "REPLACE INTO daemons (enabled, host) VALUES (%d, '%s')", 1, hostname);
+	snprintf(query, sizeof(query), "REPLACE INTO daemon (enabled, host) VALUES (%d, '%s')", 1, hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) { // short circuit
 		error(mysql_error(conn), conn);
 	}
 	signal(SIGPIPE, catch_signal);
-	snprintf(query, sizeof(query), "SELECT enabled FROM daemons WHERE host = '%s'", hostname); // dont modify query variable again!
+	snprintf(query, sizeof(query), "SELECT enabled FROM daemon WHERE host = '%s'", hostname); // dont modify query variable again!
 	while (1) {
 		MYSQL_RES *res;
 		MYSQL_ROW row;
@@ -429,7 +429,7 @@ int main(int argc, char *argv[]) {
 		strcat(meter_url, meter[1]);
 		strcat(meter_url, "/data");
 		int last_updated = atoi(meter[2]);
-		snprintf(tmp, sizeof(tmp), "UPDATE daemons SET updating_meter = %d WHERE host = '%s'", meter_id, hostname);
+		snprintf(tmp, sizeof(tmp), "UPDATE daemon SET updating_id = %d WHERE host = '%s'", meter_id, hostname);
 		if (READONLY_MODE == 0) {
 			if (mysql_query(conn, tmp)) {
 				error(mysql_error(conn), conn);

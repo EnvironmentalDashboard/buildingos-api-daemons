@@ -34,7 +34,7 @@ before_script:
   - sudo touch /root/meter_data.csv
   - sed -ie 's/time(NULL)/1577854800/g' buildingosd.c # set time to 2020-1-1 00:00:00
   - sed -ie 's|api.buildingos.com/o/token/|environmentaldashboard.org/dummy-bos-token|g' buildingosd.c
-  - sed -ie "s/WHERE source = 'buildingos' AND (gauges_using > 0 OR charts_using > 0) AND id NOT IN (SELECT updating_meter FROM daemons)//g" buildingosd.c # these extra conditions arent necessary to check
+  - sed -ie "s/WHERE source = 'buildingos' AND (is_on = 1 OR id IN (SELECT meter_id FROM chart_meter) OR id IN (SELECT meter_id FROM gauge)) AND id NOT IN (SELECT updating_id FROM daemon WHERE updating_id IS NOT NULL)//g" buildingosd.c # these extra conditions arent necessary to check
 script:
   - make all
   - sudo ./buildingosd -o || true # need sudo for these so it can write to /root/meter_data.csv
