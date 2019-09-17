@@ -1,6 +1,15 @@
 language: c
 env:
   - TZ=America/New_York
+  - DB_SERVER=localhost
+  - DB_USER=root
+  - DB_PASS=pass
+  - DB_NAME=test
+  - DB_PORT=3306
+  - CLIENT_ID=client_id
+  - CLIENT_SECRET=test
+  - USERNAME=test
+  - PASSWORD=test
 services:
   - mysql
 addons:
@@ -22,19 +31,15 @@ before_script:
   - mysql -u root -ppass test < tests/integration/db/meters.sql
   - mysql -u root -ppass test < tests/integration/db/meter_data.sql
   - mysql -u root -ppass test < tests/integration/db/api.sql
-  - mysql -u root -ppass test < tests/integration/db/orgs.sql
   - sudo touch /root/meter_data.csv
   - sed -ie 's/time(NULL)/1577854800/g' buildingosd.c # set time to 2020-1-1 00:00:00
   - sed -ie 's|api.buildingos.com/o/token/|environmentaldashboard.org/dummy-bos-token|g' buildingosd.c
-  - sed -ie "s/AND (id IN (SELECT meter_id FROM saved_chart_meters) OR id IN (SELECT meter_id FROM gauges) OR bos_uuid IN (SELECT elec_uuid FROM orbs) OR bos_uuid IN (SELECT water_uuid FROM orbs) OR bos_uuid IN (SELECT meter_uuid FROM relative_values WHERE permission = 'orb_server' AND meter_uuid != '')) AND id NOT IN (SELECT updating_meter FROM daemons WHERE target_res = 'live')//g" buildingosd.c # these extra conditions arent necessary to check
-  - printf '#define DB_SERVER "localhost"\n#define DB_USER "root"\n#define DB_PASS "pass"\n#define DB_NAME "test"\n' > ./db.h
+  - sed -ie "s/WHERE source = 'buildingos' AND (is_on = 1 OR id IN (SELECT meter_id FROM chart_meter) OR id IN (SELECT meter_id FROM gauge)) AND id NOT IN (SELECT updating_id FROM daemon WHERE updating_id IS NOT NULL)//g" buildingosd.c # these extra conditions arent necessary to check
 script:
   - make all
   - sudo ./buildingosd -o || true # need sudo for these so it can write to /root/meter_data.csv
   - sudo ./buildingosd -o || true
   - sudo ./buildingosd -o || true
-  - sudo ./buildingosd -o -rquarterhour || true
-  - sudo ./buildingosd -o -rhour || true
   - sudo wc -l /root/meter_data.csv
   - sudo cmp /root/meter_data.csv tests/integration/expected_data.csv
   - sudo cat /root/meter_data.csv

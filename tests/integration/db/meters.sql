@@ -1,39 +1,21 @@
-CREATE TABLE `meters` (
+CREATE TABLE `meter` (
   `id` int(11) NOT NULL,
-  `org_id` int(11) NOT NULL DEFAULT '0',
-  `bos_uuid` varchar(255) DEFAULT NULL,
-  `building_id` int(11) NOT NULL,
-  `source` enum('buildingos','user','glos','airnow') NOT NULL,
-  `scope` varchar(255) NOT NULL DEFAULT '',
-  `resource` varchar(255) NOT NULL DEFAULT '',
-  `name` varchar(255) NOT NULL,
-  `url` varchar(2000) DEFAULT NULL,
-  `building_url` varchar(2000) DEFAULT NULL,
-  `current` decimal(12,3) DEFAULT NULL,
-  `units` varchar(255) NOT NULL,
-  `calculated` tinyint(1) NOT NULL DEFAULT '1',
-  `live_last_updated` int(10) NOT NULL DEFAULT '0',
-  `quarterhour_last_updated` int(10) NOT NULL DEFAULT '0',
-  `hour_last_updated` int(10) NOT NULL DEFAULT '0',
-  `month_last_updated` int(10) NOT NULL DEFAULT '0',
-  `gauges_using` tinyint(1) NOT NULL DEFAULT '0' COMMENT '# of saved gauges using this meter',
-  `timeseries_using` tinyint(1) NOT NULL DEFAULT '0' COMMENT '# of saved time series using this meter',
-  `for_orb` tinyint(1) NOT NULL DEFAULT '0' COMMENT '# of Oberlin''s old orbs using this meter',
-  `orb_server` tinyint(1) NOT NULL DEFAULT '0' COMMENT 'for Jeremy''s app'
-) ENGINE=InnoDB DEFAULT CHARSET=latin1;
-
-INSERT INTO `meters` (`id`, `org_id`, `bos_uuid`, `building_id`, `source`, `scope`, `resource`, `name`, `url`, `building_url`, `current`, `units`, `calculated`, `live_last_updated`, `quarterhour_last_updated`, `hour_last_updated`, `month_last_updated`, `gauges_using`, `timeseries_using`, `for_orb`, `orb_server`) VALUES
-(1, 1, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 1', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
-(2, 1, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 2', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
-(3, 1, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 3', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
-(4, 1, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 4', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0),
-(5, 1, NULL, 1, 'buildingos', 'Other', 'Undefined', 'Test meter 5', 'https://environmentaldashboard.org/dummy-bos-data', '', '0.000', 'Kilowatts', 1, 0, 0, 0, 0, 0, 0, 0, 0);
+  `building_id` int(11) DEFAULT NULL,
+  `buildingos_uuid` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `source` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `scope` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `resource` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `url` varchar(2000) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `current` double DEFAULT NULL,
+  `units` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `calculated` tinyint(1) NOT NULL,
+  `last_updated` int(11) NOT NULL,
+  `is_on` tinyint(1) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
-ALTER TABLE `meters`
-  ADD PRIMARY KEY (`id`),
-  -- ADD UNIQUE KEY `url` (`url`), -- disable for testing bc we're gonna use the same url for all test meters
-  ADD UNIQUE KEY `bos_uuid` (`bos_uuid`);
-
-ALTER TABLE `meters`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+INSERT INTO `meter` (`id`, `building_id`, `buildingos_uuid`, `source`, `scope`, `resource`, `name`, `url`, `current`, `units`, `calculated`, `last_updated`, `is_on`) VALUES
+(1, 1, '1', 'buildingos', 'Whole meter', 'Undefined', 'Test meter 1', 'https://environmentaldashboard.org/dummy-bos-data', 0, 'Other', 1, 0, 1),
+(2, 1, '2', 'buildingos', 'Whole meter', 'Undefined', 'Test meter 2', 'https://environmentaldashboard.org/dummy-bos-data', 0, 'Other', 1, 0, 1),
+(3, 1, '3', 'buildingos', 'Whole meter', 'Undefined', 'Test meter 3', 'https://environmentaldashboard.org/dummy-bos-data', 0, 'Other', 1, 0, 1);
