@@ -187,13 +187,16 @@ struct MemoryStruct http_request(char *url, char *post, int custom_header, int m
 /**
  * Execute before program termination
  */
-void cleanup(MYSQL *conn) {
+void cleanup(MYSQL *conn, int delay) {
 	char query[SMALL_CONTAINER];
 	snprintf(query, sizeof(query), "DELETE FROM daemon WHERE host = '%s'", hostname);
 	if (READONLY_MODE == 0 && mysql_query(conn, query)) {
 		fprintf(stderr, "%s", mysql_error(conn));
 	}
 	mysql_close(conn);
+	if (delay > 0) {
+		sleep(delay);
+	}
 	exit(1);
 }
 
@@ -202,7 +205,7 @@ void cleanup(MYSQL *conn) {
  */
 void error(const char *msg, MYSQL *conn) {
 	fprintf(stderr, "%s", msg);
-	cleanup(conn);
+	cleanup(conn, 0);
 }
 
 /**
@@ -219,7 +222,7 @@ MYSQL_ROW fetch_row(MYSQL *conn, char *query) {
 	// mysql_free_result(res);
 	if (row == NULL) {
 		fprintf(stderr, "QUERY '%s' RETURNED 0 ROWS\n", query);
-		cleanup(conn);
+		cleanup(conn, 60);
 	}
 	return row;
 }
@@ -418,7 +421,7 @@ int main(int argc, char *argv[]) {
 			} else if (row[0][0] != '1') {
 				// if enabled column turned off, exit
 				puts("Enabled column switched off");
-				cleanup(conn);
+				cleanup(conn, 0);
 			}
 			mysql_free_result(res);
 		}
@@ -495,7 +498,7 @@ int main(int argc, char *argv[]) {
 			break;
 		}
 	}
-	cleanup(conn);
+	cleanup(conn, 0);
 	mysql_close(conn);
 	return EXIT_SUCCESS;
 }
